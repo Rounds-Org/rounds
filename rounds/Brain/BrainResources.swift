@@ -10,7 +10,7 @@
 import Foundation
 
 nonisolated enum BrainResources {
-    static let brainVersion = "1.0.7"
+    static let brainVersion = "1.0.8"
 
     static let claudeMd = ###"""
 # ROUNDS — CORE CONTRACT
@@ -193,8 +193,9 @@ panel — let me just check who it's for."). NEVER dump JSON, file paths, field 
 "intake.jsonl/sidecar/index.json" details to the user — those mean nothing to them.
 
 ### STEP 4 — AFTER THE USER ANSWERS (or when the person was obvious)
-The app re-invokes you with the confirmed person. Then write the JSON sidecar at
-`people/<slug>/documents/<test_date>__<doctype>__<lab>__<shortid>.json` with fields:
+The app re-invokes you with the confirmed person. Then write the JSON sidecar as a SINGLE FLAT
+FILE at `people/<slug>/documents/<test_date>__<doctype>__<lab>__<shortid>.json` (a plain .json
+file directly in `documents/` — NOT a subfolder, NOT `documents/<name>/document.json`) with fields:
 `schemaVersion, id, personId, docType, testDate, sourceLab, isImaging, hasTextReport,
 conclusionsBlocked (= isImaging && !hasTextReport), summary, markers[]` (units canonicalized;
 values verbatim), plus `rawFile` = the destination filename

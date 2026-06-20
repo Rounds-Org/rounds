@@ -59,12 +59,9 @@ nonisolated enum VaultStore {
     // MARK: documents
 
     static func loadDocuments(_ vault: VaultPaths, people: [Person]) -> [MedDocument] {
-        let fm = FileManager.default
         var docs: [MedDocument] = []
         for person in people {
-            let docsDir = vault.personDocs(person.slug)
-            guard let items = try? fm.contentsOfDirectory(at: docsDir, includingPropertiesForKeys: nil) else { continue }
-            for url in items where url.pathExtension.lowercased() == "json" {
+            for url in sidecarURLs(in: vault.personDocs(person.slug)) {
                 guard let data = try? Data(contentsOf: url),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 else { continue }
@@ -72,6 +69,33 @@ nonisolated enum VaultStore {
             }
         }
         return docs.sorted { ($0.testDate ?? "") > ($1.testDate ?? "") }
+    }
+
+    /// Document sidecars in a `documents/` dir — tolerant of BOTH layouts the brain has produced:
+    /// a flat `<name>.json`, OR a per-document subfolder `<name>/document.json` (or its first *.json).
+    static func sidecarURLs(in docsDir: URL) -> [URL] {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: docsDir, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        var out: [URL] = []
+        for url in items {
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            if !isDir {
+                if url.pathExtension.lowercased() == "json" { out.append(url) }
+            } else {
+                let inner = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+                if let doc = inner.first(where: { $0.lastPathComponent == "document.json" })
+                    ?? inner.first(where: { $0.pathExtension.lowercased() == "json" }) {
+                    out.append(doc)
+                }
+            }
+        }
+        return out
+    }
+
+    /// A path relative to the vault root (so the document can be opened regardless of nesting).
+    static func relativeToRoot(_ url: URL, _ vault: VaultPaths) -> String {
+        let root = vault.root.path.hasSuffix("/") ? vault.root.path : vault.root.path + "/"
+        return url.path.hasPrefix(root) ? String(url.path.dropFirst(root.count)) : url.lastPathComponent
     }
 
     /// Tolerant sidecar parsing — the brain's JSON evolves; never let one field break the UI.
@@ -99,7 +123,9 @@ nonisolated enum VaultStore {
                     flag: m["flag"] as? String))
             }
         }
-        let relPath = "people/\(personId)/documents/\(rawFile)"
+        // The raw file lives next to its sidecar (flat OR inside the per-document subfolder).
+        let rawURL = sidecarURL.deletingLastPathComponent().appendingPathComponent(rawFile)
+        let relPath = relativeToRoot(rawURL, vault)
         return MedDocument(
             id: (obj["id"] as? String) ?? rawFile,
             personId: personId,
@@ -144,25 +170,48 @@ nonisolated enum VaultStore {
         let peopleDirs = (try? fm.contentsOfDirectory(at: vault.peopleDir, includingPropertiesForKeys: nil)) ?? []
         for pdir in peopleDirs {
             let docsDir = pdir.appendingPathComponent("documents", isDirectory: true)
-            guard let sidecars = try? fm.contentsOfDirectory(at: docsDir, includingPropertiesForKeys: nil) else { continue }
-            for url in sidecars where url.pathExtension.lowercased() == "json" {
+            for url in sidecarURLs(in: docsDir) {
                 guard let data = try? Data(contentsOf: url),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let rawFile = (obj["rawFile"] as? String) ?? (obj["fileName"] as? String)
                 else { continue }
                 let prov = obj["provenance"] as? [String: Any]
                 let stagedFrom = (prov?["stagedFrom"] as? String) ?? (obj["stagedFrom"] as? String)
-                let dest = docsDir.appendingPathComponent(rawFile)
+                // Move the raw NEXT TO its sidecar (works for both flat and nested layouts).
+                let dest = url.deletingLastPathComponent().appendingPathComponent(rawFile)
                 let matches = stagedFrom == stagedPath || (!fm.fileExists(atPath: dest.path) && stagedFrom == nil)
                 if matches, !fm.fileExists(atPath: dest.path) {
                     do {
                         try fm.moveItem(at: URL(fileURLWithPath: stagedPath), to: dest)
-                        return "\(pdir.lastPathComponent)/documents/\(rawFile)"
+                        return relativeToRoot(dest, vault)
                     } catch { return nil }
                 }
             }
         }
         return nil
+    }
+
+    /// Sweep: move any already-filed raw still sitting in inbox into the dir its sidecar points to.
+    /// Repairs documents filed before reconcile understood a layout, so raws stop being orphaned.
+    static func reconcileAllStaged(_ vault: VaultPaths) {
+        let fm = FileManager.default
+        let peopleDirs = (try? fm.contentsOfDirectory(at: vault.peopleDir, includingPropertiesForKeys: nil)) ?? []
+        for pdir in peopleDirs {
+            let docsDir = pdir.appendingPathComponent("documents", isDirectory: true)
+            for url in sidecarURLs(in: docsDir) {
+                guard let data = try? Data(contentsOf: url),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rawFile = (obj["rawFile"] as? String) ?? (obj["fileName"] as? String)
+                else { continue }
+                let dest = url.deletingLastPathComponent().appendingPathComponent(rawFile)
+                guard !fm.fileExists(atPath: dest.path) else { continue }
+                let prov = obj["provenance"] as? [String: Any]
+                if let from = (prov?["stagedFrom"] as? String) ?? (obj["stagedFrom"] as? String),
+                   fm.fileExists(atPath: from) {
+                    try? fm.moveItem(at: URL(fileURLWithPath: from), to: dest)
+                }
+            }
+        }
     }
 
     // MARK: hypotheses

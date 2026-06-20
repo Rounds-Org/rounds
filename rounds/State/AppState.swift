@@ -159,6 +159,7 @@ final class AppState {
             // Still scaffold the vault so the UI has somewhere to live.
             try? vault.ensureScaffold()
         }
+        VaultStore.reconcileAllStaged(vault)   // repair any filed-but-stranded raw files in inbox
         reload()
         if let raw = VaultStore.readString("model", vault), let m = RoundsModel(rawValue: raw) {
             selectedModel = m
@@ -750,7 +751,9 @@ final class AppState {
         }
         let prompt = """
         The people are confirmed. For EACH document below, perform STEP 4 filing: write its JSON \
-        sidecar under people/<slug>/documents/ with a correct `rawFile` and \
+        sidecar as a SINGLE FLAT FILE directly in people/<slug>/documents/ named \
+        `<test_date>__<doctype>__<lab>__<shortid>.json` (a plain .json file — NOT a subfolder, NOT \
+        documents/<name>/document.json), with a correct `rawFile` and \
         `provenance.stagedFrom` set to THAT document's staged path, set its `title`, create \
         person.json + a per-person CLAUDE.md for any NEW person (and append the confirmed family \
         fact to .rounds/memory.md), and append the Q&A to that person's intake.jsonl. When \

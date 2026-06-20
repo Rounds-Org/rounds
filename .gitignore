@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Xcode — user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Xcode — build output
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# Node (the rounds-sources MCP and any tooling under brain/mcp)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Secrets / local config
+.env
+.env.*
+*.local
+
+# Local health-data test vaults — NEVER commit real or sample health data.
+# Test vaults are typically created under /tmp or named "Rounds*"; keep them out of git.
+/tmp/Rounds*/
+Rounds-test-vault/
+*.rounds-vault/
+test-vaults/
+
+# Note: brain/ and docs/ are SOURCE and are intentionally tracked.
+dist/*.dmg

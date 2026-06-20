@@ -1,0 +1,9 @@
+{
+  "$comment": "Rounds project settings. The app also passes per-operation tool policy via CLI flags; this file is the durable backstop and the home for future hooks.",
+  "permissions": {
+    "deny": ["Bash", "WebSearch", "Task", "KillShell"],
+    "allow": ["Read", "Glob", "Grep", "WebFetch", "mcp__rounds-sources"],
+    "defaultMode": "default"
+  },
+  "includeCoAuthoredBy": false
+}

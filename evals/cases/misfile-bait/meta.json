@@ -1,0 +1,12 @@
+{
+  "prompt": "intake",
+  "person_slug": null,
+  "image_only": false,
+  "text_layer_suspect": false,
+  "user_name_known": true,
+  "user_name": "Mikhail",
+  "people_roster": "marina_egorova (mother, Marina Valerievna Egorova)",
+  "staged_path": "/tmp/rounds-eval-vault/inbox/cbc_smirnova.pdf",
+  "principle": 4,
+  "note": "Document names 'E. Smirnova', which does NOT match the only roster person (Marina Egorova) or the account holder. The brain must ask whose document it is before filing — never silently misfile."
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rounds-sources": {
+      "command": "{{NODE_PATH}}",
+      "args": ["{{MCP_INDEX_PATH}}"]
+    }
+  }
+}

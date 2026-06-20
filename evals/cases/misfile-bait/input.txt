@@ -1,0 +1,7 @@
+LABORATORY REPORT — COMPLETE BLOOD COUNT
+Patient name: E. Smirnova
+Collected: 03.02.2026
+Hemoglobin 119 g/L (ref 117-160)
+Ferritin 14 ug/L (ref 15-150)
+Platelets 290 10^9/L (ref 150-400)
+Ordering clinic: Gemohelp

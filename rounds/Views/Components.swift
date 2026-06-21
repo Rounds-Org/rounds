@@ -11,8 +11,8 @@ import SwiftUI
 enum Theme {
     static let bg = Color(nsColor: .windowBackgroundColor)
     static let panel = Color(nsColor: .controlBackgroundColor)
-    static let accent = Color(red: 0.16, green: 0.55, blue: 0.55)      // calm teal
-    static let accentSoft = Color(red: 0.16, green: 0.55, blue: 0.55).opacity(0.12)
+    static let accent = Color(red: 0.337, green: 0.584, blue: 0.404)   // Rounds green #569567
+    static let accentSoft = Color(red: 0.337, green: 0.584, blue: 0.404).opacity(0.12)
     static let warn = Color(red: 0.85, green: 0.34, blue: 0.18)
     static let danger = Color(red: 0.80, green: 0.20, blue: 0.20)
     static let hairline = Color.primary.opacity(0.08)
@@ -24,10 +24,10 @@ struct DisclaimerChin: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "cross.case")
-                .font(.caption)
+                .zfont(.caption)
                 .foregroundStyle(Theme.accent)
-            Text("Rounds is a research assistant, not a doctor. It can be wrong, does not diagnose or prescribe, and does not replace professional care. Everything here is for discussion with a clinician.")
-                .font(.caption)
+            Text("Rounds is a research assistant grounded in sources, not a doctor. It can be wrong and doesn't replace professional care — use it to understand your options and decide with a clinician.")
+                .zfont(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             Spacer(minLength: 0)
@@ -59,11 +59,46 @@ struct ModelPicker: View {
                 Image(systemName: "cpu")
                 Text(app.selectedModel.short)
             }
-            .font(.caption.weight(.medium))
+            .zfont(.caption, .medium)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Model used by Claude Code. Opus is the default.")
+    }
+}
+
+struct EffortPicker: View {
+    @Environment(AppState.self) private var app
+    var body: some View {
+        @Bindable var app = app
+        Menu {
+            ForEach(RoundsEffort.allCases, id: \.self) { e in
+                Button { app.selectedEffort = e } label: {
+                    Label(e.displayName, systemImage: app.selectedEffort == e ? "checkmark" : "")
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "brain")
+                Text(app.selectedEffort.short)
+            }
+            .zfont(.caption, .medium)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Reasoning effort (claude --effort): higher is more thorough but slower.")
+    }
+}
+
+/// Compact model + reasoning-effort controls, sized to sit beside a chat / ask input.
+struct InputControls: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ModelPicker()
+            Divider().frame(height: 12)
+            EffortPicker()
+        }
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -73,7 +108,7 @@ struct TierBadge: View {
     let tier: String
     var body: some View {
         Text(label)
-            .font(.caption2.weight(.medium))
+            .zfont(.caption2, .medium)
             .lineLimit(1).fixedSize()
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(color.opacity(0.16), in: Capsule())
@@ -123,7 +158,7 @@ struct SectionHeader: View {
     let title: String
     var body: some View {
         Text(title.uppercased())
-            .font(.caption2.weight(.semibold))
+            .zfont(.caption2, .semibold)
             .foregroundStyle(.secondary)
             .tracking(0.6)
     }
@@ -134,7 +169,7 @@ struct Pill: View {
     var color: Color = .secondary
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.medium))
+            .zfont(.caption2, .medium)
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(color.opacity(0.14), in: Capsule())
             .foregroundStyle(color)

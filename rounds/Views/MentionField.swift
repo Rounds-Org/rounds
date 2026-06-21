@@ -36,7 +36,7 @@ struct MentionField: View {
                     .onChange(of: text) { _, new in updateMention(new) }
                     .onKeyPress { press in handleKey(press) }
                 Button(action: trySend) {
-                    Image(systemName: "arrow.up.circle.fill").font(.title2)
+                    Image(systemName: "arrow.up.circle.fill").zfont(.title2)
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(text.isEmpty ? .secondary : Theme.accent)
@@ -60,9 +60,9 @@ struct MentionField: View {
     private var menu: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Reference a file, person, next step, or chat").font(.caption2).foregroundStyle(.secondary)
+                Text("Reference a file, person, next step, or chat").zfont(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text("↑↓ ↩").font(.caption2).foregroundStyle(.tertiary)
+                Text("↑↓ ↩").zfont(.caption2).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10).padding(.vertical, 5)
             ForEach(Array(items.enumerated()), id: \.element.id) { i, ref in
@@ -71,7 +71,7 @@ struct MentionField: View {
                         Image(systemName: ref.iconName).foregroundStyle(Theme.accent).frame(width: 16)
                         Text(ref.label).lineLimit(1)
                         Spacer()
-                        Text(ref.kind.rawValue).font(.caption2).foregroundStyle(.tertiary)
+                        Text(ref.kind.rawValue).zfont(.caption2).foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 5).padding(.horizontal, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)

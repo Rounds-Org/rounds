@@ -28,16 +28,16 @@ struct IntakeSheet: View {
                 HStack(spacing: 8) {
                     Image(systemName: "info.circle").foregroundStyle(Theme.warn)
                     Text("Some of these look like an image/scan with no written report. Rounds will store them, but only draws conclusions from text reports.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .zfont(.caption).foregroundStyle(.secondary)
                 }
                 .padding(10)
                 .background(Theme.warn.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            Text(state.question.title).font(.title3.weight(.medium))
+            Text(state.question.title).zfont(.title3, .medium)
                 .fixedSize(horizontal: false, vertical: true)
             if let ctx = state.question.context, !ctx.isEmpty {
-                Text(ctx).font(.callout).foregroundStyle(.secondary)
+                Text(ctx).zfont(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -61,18 +61,18 @@ struct IntakeSheet: View {
 
             if state.askIdentity {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Your name").font(.caption).foregroundStyle(.secondary)
-                    TextField("e.g. Mikhail", text: $nameAnswer)
+                    Text("Your name").zfont(.caption).foregroundStyle(.secondary)
+                    TextField("e.g. Mike Smith", text: $nameAnswer)
                         .textFieldStyle(.roundedBorder)
                 }
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Useful context (optional)").font(.caption).foregroundStyle(.secondary)
+                Text("Useful context (optional)").zfont(.caption).foregroundStyle(.secondary)
                 Text("Who it is if it's a new person, where they live, habits, conditions — anything that helps Rounds reason.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .zfont(.caption2).foregroundStyle(.tertiary)
                 TextEditor(text: $freeform)
-                    .font(.body)
+                    .zfont(.body)
                     .frame(height: 70)
                     .padding(6)
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
@@ -108,7 +108,7 @@ struct IntakeSheet: View {
             HStack(spacing: 6) {
                 Image(systemName: "tray.full")
                 Text(state.files.count == 1 ? "Filing a document" : "Filing \(state.files.count) documents")
-                    .font(.headline)
+                    .zfont(.headline)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -120,13 +120,13 @@ struct IntakeSheet: View {
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
                                 .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: f.stagedPath)) }
                                 .help("Open \(f.fileName)")
-                            Text(f.fileName).font(.caption2).foregroundStyle(.secondary)
+                            Text(f.fileName).zfont(.caption2).foregroundStyle(.secondary)
                                 .lineLimit(1).frame(width: 78)
                         }
                     }
                     if state.files.count > 6 {
                         Text("+\(state.files.count - 6)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                             .frame(width: 44, height: 100)
                             .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
                     }

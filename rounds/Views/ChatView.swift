@@ -13,6 +13,7 @@ struct ChatView: View {
     @Environment(AppState.self) private var app
     @State private var draft = ""
     @State private var references: [Reference] = []
+    @State private var atBottom = true   // only magnet-scroll when the user is already at the bottom
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,9 +43,9 @@ struct ChatView: View {
                     HStack(spacing: 6) {
                         ForEach(references) { ref in
                             HStack(spacing: 4) {
-                                Image(systemName: ref.iconName).font(.caption2)
-                                Text(ref.label).font(.caption2).lineLimit(1)
-                                Button { references.removeAll { $0 == ref } } label: { Image(systemName: "xmark").font(.system(size: 8)) }
+                                Image(systemName: ref.iconName).zfont(.caption2)
+                                Text(ref.label).zfont(.caption2).lineLimit(1)
+                                Button { references.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
                                     .buttonStyle(.borderless)
                             }
                             .padding(.horizontal, 7).padding(.vertical, 3)
@@ -56,8 +57,7 @@ struct ChatView: View {
             MentionField(text: $draft, references: $references,
                          placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
                          onSend: send, autofocus: true)
-            Text("Research tool grounded in sources — not medical advice, and it can be wrong.")
-                .font(.caption2).foregroundStyle(.tertiary)
+            InputControls()
         }
         .padding(12)
         .background(Theme.panel)
@@ -83,14 +83,13 @@ struct ChatView: View {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     if !app.statusLine.isEmpty {
-                        Text(app.statusLine).font(.caption).foregroundStyle(.secondary)
+                        Text(app.statusLine).zfont(.caption).foregroundStyle(.secondary)
                     }
                     Button { app.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                        .buttonStyle(.borderless).font(.caption).tint(Theme.warn)
+                        .buttonStyle(.borderless).zfont(.caption).tint(Theme.warn)
                 }
             }
             Spacer()
-            ModelPicker()
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
@@ -106,7 +105,7 @@ struct ChatView: View {
                     }
 
                     if app.isStreaming {
-                        ResearchTrace(steps: app.currentTrace, statusLine: app.statusLine)
+                        ResearchTrace(steps: app.currentTrace, statusLine: app.statusLine, tokens: app.currentTokens)
                         if !app.liveText.isEmpty {
                             MessageRow(message: ChatMessage(id: "live", role: .assistant, text: app.liveText + " ▍", timestamp: Date()))
                         }
@@ -117,8 +116,31 @@ struct ChatView: View {
                 .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .onChange(of: app.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
-            .onChange(of: app.liveText) { _, _ in proxy.scrollTo("bottom") }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60
+            } action: { _, nowAtBottom in
+                atBottom = nowAtBottom
+            }
+            .onChange(of: app.messages.count) { _, _ in if atBottom { withAnimation { proxy.scrollTo("bottom") } } }
+            .onChange(of: app.liveText) { _, _ in if atBottom { proxy.scrollTo("bottom") } }
+            .overlay(alignment: .bottomTrailing) {
+                if !atBottom {
+                    Button {
+                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        atBottom = true
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .zfont(size: 13, weight: .semibold).foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(Theme.accent, in: Circle())
+                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 18).padding(.bottom, 12)
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: atBottom)
         }
     }
 
@@ -138,8 +160,8 @@ struct MessageRow: View {
                         HStack(spacing: 5) {
                             ForEach(message.references) { ref in
                                 HStack(spacing: 4) {
-                                    Image(systemName: ref.iconName).font(.system(size: 9))
-                                    Text(ref.label).font(.caption2).lineLimit(1)
+                                    Image(systemName: ref.iconName).zfont(size: 9)
+                                    Text(ref.label).zfont(.caption2).lineLimit(1)
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 2)
                                 .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
@@ -158,7 +180,7 @@ struct MessageRow: View {
         case .system:
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").foregroundStyle(.secondary)
-                Text(message.text).font(.callout).foregroundStyle(.secondary).italic()
+                Text(message.text).zfont(.callout).foregroundStyle(.secondary).italic()
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 8) {
@@ -186,7 +208,7 @@ struct MessageRow: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(message.hypotheses.count == 1 ? "Added to your next steps" : "Added \(message.hypotheses.count) next steps",
                               systemImage: "checklist")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                            .zfont(.caption, .semibold).foregroundStyle(Theme.accent)
                         ForEach(message.hypotheses) { InlineStepCard(hyp: $0) }
                     }
                     .padding(.top, 2)
@@ -209,12 +231,12 @@ struct InlineStepCard: View {
         Button { app.selectHome() } label: {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: hyp.isQuestion ? "bubble.left.and.text.bubble.right" : "checklist")
-                    .foregroundStyle(Theme.accent).font(.callout)
+                    .foregroundStyle(Theme.accent).zfont(.callout)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(hyp.title).font(.subheadline.weight(.medium))
+                    Text(hyp.title).zfont(.subheadline, .medium)
                         .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
                     if !hyp.whyNow.isEmpty {
-                        Text(hyp.whyNow).font(.caption).foregroundStyle(.secondary)
+                        Text(hyp.whyNow).zfont(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
                     }
                     HStack(spacing: 6) {
@@ -223,7 +245,7 @@ struct InlineStepCard: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").zfont(.caption2).foregroundStyle(.tertiary)
             }
             .padding(12)
             .contentShape(Rectangle())
@@ -246,7 +268,7 @@ struct CopyButton: View {
             copied = true
         } label: {
             Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                .font(.caption2).foregroundStyle(.secondary)
+                .zfont(.caption2).foregroundStyle(.secondary)
         }
         .buttonStyle(.borderless)
     }
@@ -257,19 +279,25 @@ struct CopyButton: View {
 struct ResearchTrace: View {
     let steps: [String]
     let statusLine: String
+    var tokens: Int = 0
     @State private var expanded = true
 
     private var current: String { statusLine.isEmpty ? (steps.last ?? "Working…") : statusLine }
+    private var tokenLabel: String {
+        guard tokens > 0 else { return "" }
+        return tokens >= 1000 ? String(format: " · %.1fk tokens", Double(tokens) / 1000) : " · \(tokens) tokens"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button { withAnimation { expanded.toggle() } } label: {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.mini)
-                    Text(expanded ? "Working · \(steps.count) step\(steps.count == 1 ? "" : "s")" : current)
-                        .font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                    Text((expanded ? "Working · \(steps.count) step\(steps.count == 1 ? "" : "s")" : current) + tokenLabel)
+                        .zfont(.caption, .medium).foregroundStyle(.secondary).lineLimit(1)
+                        .monospacedDigit()
                     Spacer(minLength: 4)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.tertiary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").zfont(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .buttonStyle(.plain)
@@ -280,9 +308,9 @@ struct ResearchTrace: View {
                         if i == steps.count - 1 {
                             ProgressView().controlSize(.mini)
                         } else {
-                            Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(Theme.accent)
+                            Image(systemName: "checkmark.circle.fill").zfont(.caption2).foregroundStyle(Theme.accent)
                         }
-                        Text(step).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(step).zfont(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
@@ -299,11 +327,11 @@ struct AlertBanner: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.white)
             VStack(alignment: .leading, spacing: 3) {
-                Text("This may need urgent attention").font(.headline).foregroundStyle(.white)
-                Text(alert.message).font(.callout).foregroundStyle(.white.opacity(0.95))
+                Text("This may need urgent attention").zfont(.headline).foregroundStyle(.white)
+                Text(alert.message).zfont(.callout).foregroundStyle(.white.opacity(0.95))
                 if let m = alert.marker, let v = alert.value {
                     Text("\(m): \(v)" + (alert.basis.map { " · \($0)" } ?? ""))
-                        .font(.caption).foregroundStyle(.white.opacity(0.85))
+                        .zfont(.caption).foregroundStyle(.white.opacity(0.85))
                 }
             }
             Spacer()
@@ -330,7 +358,7 @@ struct MarkdownText: View {
     @ViewBuilder private func view(for block: MDBlock) -> some View {
         switch block {
         case .heading(let t):
-            Text(t).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(t).zfont(.headline).fixedSize(horizontal: false, vertical: true)
         case .paragraph(let t):
             Text(MarkdownText.inline(t)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         case .bullets(let items):
@@ -356,7 +384,7 @@ struct MarkdownText: View {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
                     GridRow {
                         ForEach(Array(header.enumerated()), id: \.offset) { _, h in
-                            Text(MarkdownText.inline(h)).font(.callout.weight(.semibold))
+                            Text(MarkdownText.inline(h)).zfont(.callout, .semibold)
                         }
                     }
                     Divider()

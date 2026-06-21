@@ -21,6 +21,7 @@ FILES = [
     ("redFlagSymptoms", "red-flag-symptoms.json",           '{"schemaVersion":1,"rules":[]}\n'),
     ("complaintPrompt", "prompts/complaint.md",             "## complaint (missing)\n"),
     ("mcpIndexMjs",     "mcp/rounds-sources/index.mjs",     "#!/usr/bin/env node\n// rounds-sources MCP (placeholder)\nprocess.stdin.resume();\n"),
+    ("permissionHook",  "mcp/permission-hook.mjs",          "#!/usr/bin/env node\nprocess.exit(0);\n"),
 ]
 
 DELIM = '###'
@@ -45,7 +46,7 @@ def emit():
         "import Foundation",
         "",
         "nonisolated enum BrainResources {",
-        '    static let brainVersion = "1.0.16"',
+        '    static let brainVersion = "1.0.18"',
         "",
     ]
     for name, rel, placeholder in FILES:

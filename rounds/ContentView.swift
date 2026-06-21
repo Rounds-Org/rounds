@@ -19,6 +19,15 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // ⌘+/⌘− text zoom: every `.zfont(...)` reads this scale and renders a REAL scaled font, so
+        // the layout reflows naturally and — because there's no transform — clicks always land
+        // exactly where controls are drawn.
+        scaledContent
+            .environment(\.zoomScale, app.uiScale)
+            .preferredColorScheme(app.preferredColorScheme)
+    }
+
+    private var scaledContent: some View {
         Group {
             if app.booted { mainView } else { BootSkeleton() }
         }
@@ -33,13 +42,32 @@ struct ContentView: View {
         .sheet(item: Binding(get: { app.intake.map { IntakeBox($0) } }, set: { if $0 == nil { app.cancelIntake() } })) { box in
             IntakeSheet(state: box.value).id(box.id)   // fresh fields per grouped question
         }
+        .sheet(item: Binding(get: { app.pendingPermission }, set: { if $0 == nil, let p = app.pendingPermission { app.respondPermission(p, allow: false, always: false) } })) { pp in
+            PermissionDialog(request: pp).interactiveDismissDisabled()
+        }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             handleDrop(providers); return true
         }
     }
 
+    @ViewBuilder private var engineNoticeBar: some View {
+        if let notice = app.engineNotice {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "creditcard.trianglebadge.exclamationmark").foregroundStyle(.white)
+                Text(notice).zfont(.callout).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button { app.engineNotice = nil } label: { Image(systemName: "xmark").foregroundStyle(.white.opacity(0.9)) }
+                    .buttonStyle(.borderless)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.warn)
+        }
+    }
+
     private var mainView: some View {
         VStack(spacing: 0) {
+            engineNoticeBar
             // Two top-level panes only: the sidebar, and the center region. Sources lives INSIDE
             // the center region (not as a third pane) so showing/hiding it can never resize the
             // sidebar — only the chat area gives up width to the sources column.
@@ -85,7 +113,7 @@ private struct ToastBanner: View {
         if let text = app.toast {
             HStack(spacing: 8) {
                 Image(systemName: "info.circle").foregroundStyle(.white)
-                Text(text).font(.callout).foregroundStyle(.white)
+                Text(text).zfont(.callout).foregroundStyle(.white)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Color.black.opacity(0.82), in: Capsule())
@@ -140,10 +168,10 @@ private struct DropOverlay: View {
             Theme.accent.opacity(0.10)
             VStack(spacing: 12) {
                 Image(systemName: "tray.and.arrow.down.fill")
-                    .font(.system(size: 44)).foregroundStyle(Theme.accent)
-                Text("Release to add to Rounds").font(.title2.weight(.semibold))
+                    .zfont(size: 44).foregroundStyle(Theme.accent)
+                Text("Release to add to Rounds").zfont(.title2, .semibold)
                 Text("Rounds will read it on-device and ask whose it is before filing.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .zfont(.callout).foregroundStyle(.secondary)
             }
             .padding(28)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -182,23 +210,74 @@ private struct CenterPane: View {
 
 private struct CenterTabBar: View {
     @Environment(AppState.self) private var app
-    @State private var dragging: AppState.CenterItem?
+    @State private var draggingId: String?
+    @State private var dragDX: CGFloat = 0
+    @State private var startMid: [String: CGFloat] = [:]   // tab centers snapshotted at drag start
+    @State private var liveMid: [String: CGFloat] = [:]    // live tab centers
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(app.openTabs) { item in
-                    TabView(item: item)
-                        .onDrag {
-                            dragging = item
-                            return NSItemProvider(object: item.id as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: TabDropDelegate(item: item, app: app, dragging: $dragging))
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(displayOrder, id: \.id) { item in
+                        TabView(item: item)
+                            .id(item.id)
+                            .opacity(draggingId == item.id ? 0.55 : 1)   // translucent while dragging
+                            .scaleEffect(draggingId == item.id ? 1.04 : 1)
+                            .zIndex(draggingId == item.id ? 1 : 0)
+                            .background(GeometryReader { g in
+                                let m = g.frame(in: .named("tabbar")).midX
+                                Color.clear.onAppear { liveMid[item.id] = m }
+                                    .onChange(of: m) { _, v in liveMid[item.id] = v }
+                            })
+                            .gesture(dragGesture(item))
+                    }
                 }
+                .coordinateSpace(name: "tabbar")
+                .animation(.easeInOut(duration: 0.18), value: displayOrder.map(\.id))
             }
+            .onChange(of: app.activeTab) { _, tab in
+                if draggingId == nil { withAnimation { proxy.scrollTo(tab.id, anchor: .center) } }
+            }
+            .onAppear { proxy.scrollTo(app.activeTab.id, anchor: .center) }
         }
         .background(Theme.panel.opacity(0.6))
         .overlay(Divider(), alignment: .bottom)
+    }
+
+    /// Lowest index a tab may land at (after a pinned Home).
+    private var lowBound: Int { app.openTabs.first == .home ? 1 : 0 }
+
+    private var targetIndex: Int? {
+        guard let id = draggingId, let sm = startMid[id] else { return nil }
+        let center = sm + dragDX
+        let n = app.openTabs.filter { $0.id != id }.filter { (startMid[$0.id] ?? .infinity) < center }.count
+        return max(lowBound, min(n, app.openTabs.count - 1))
+    }
+
+    private var displayOrder: [AppState.CenterItem] {
+        guard let id = draggingId, let t = targetIndex,
+              let from = app.openTabs.firstIndex(where: { $0.id == id }) else { return app.openTabs }
+        var arr = app.openTabs
+        let it = arr.remove(at: from)
+        arr.insert(it, at: max(0, min(t, arr.count)))
+        return arr
+    }
+
+    private func dragGesture(_ item: AppState.CenterItem) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named("tabbar"))
+            .onChanged { v in
+                guard item != .home else { return }   // Home is pinned
+                if draggingId == nil { draggingId = item.id; startMid = liveMid }
+                if draggingId == item.id { dragDX = v.translation.width }
+            }
+            .onEnded { _ in
+                if let id = draggingId, let t = targetIndex,
+                   let from = app.openTabs.firstIndex(where: { $0.id == id }), from != t {
+                    app.moveTab(from: from, to: t)
+                }
+                draggingId = nil; dragDX = 0
+            }
     }
 
     private struct TabView: View {
@@ -211,11 +290,11 @@ private struct CenterTabBar: View {
                 if app.tabIsStreaming(item) {
                     PulsingDot()
                 } else {
-                    Image(systemName: icon).font(.caption2)
+                    Image(systemName: icon).zfont(.caption2)
                 }
-                Text(title).font(.caption).lineLimit(1)
+                Text(title).zfont(.caption).lineLimit(1)
                 if item != .home {
-                    Button { app.closeTab(item) } label: { Image(systemName: "xmark").font(.system(size: 9)) }
+                    Button { app.closeTab(item) } label: { Image(systemName: "xmark").zfont(size: 9) }
                         .buttonStyle(.borderless)
                         .opacity(hover || isActive ? 1 : 0)
                 }
@@ -272,21 +351,6 @@ struct PulsingDot: View {
     }
 }
 
-private struct TabDropDelegate: DropDelegate {
-    let item: AppState.CenterItem
-    let app: AppState
-    @Binding var dragging: AppState.CenterItem?
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging, dragging != item,
-              let from = app.openTabs.firstIndex(of: dragging),
-              let to = app.openTabs.firstIndex(of: item) else { return }
-        app.moveTab(from: from, to: to)
-    }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool { dragging = nil; return true }
-}
-
 /// Compact update chip shown at the bottom of the sidebar.
 struct UpdateChip: View {
     @Environment(AppState.self) private var app
@@ -296,8 +360,8 @@ struct UpdateChip: View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.down.circle.fill").foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Update available").font(.caption.weight(.medium))
-                Text("Version \(update.latestVersion)").font(.caption2).foregroundStyle(.secondary)
+                Text("Update available").zfont(.caption, .medium)
+                Text("Version \(update.latestVersion)").zfont(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
             Button("Get") {
@@ -306,7 +370,7 @@ struct UpdateChip: View {
             }
             .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
             if !update.mandatory {
-                Button { app.dismissUpdate() } label: { Image(systemName: "xmark").font(.caption2) }
+                Button { app.dismissUpdate() } label: { Image(systemName: "xmark").zfont(.caption2) }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
             }
         }
@@ -319,4 +383,52 @@ struct UpdateChip: View {
 
 #Preview {
     ContentView().environment(AppState())
+}
+
+/// Allow/Deny prompt for a gated Claude Code tool (Bash, web search, sub-agent…) in full-power mode.
+struct PermissionDialog: View {
+    @Environment(AppState.self) private var app
+    let request: PendingPermission
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "hand.raised.fill").zfont(.title2).foregroundStyle(Theme.warn)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Claude wants to use \(friendly)").zfont(.headline)
+                    Text("Approve this action on your Mac?").zfont(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if !request.inputSummary.isEmpty {
+                ScrollView {
+                    Text(request.inputSummary)
+                        .zfont(.caption, design: .monospaced).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 140)
+                .padding(10)
+                .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
+            }
+            HStack(spacing: 10) {
+                Button("Deny", role: .cancel) { app.respondPermission(request, allow: false, always: false) }
+                Spacer()
+                Button("Always allow \(request.toolName)") { app.respondPermission(request, allow: true, always: true) }
+                    .buttonStyle(.bordered)
+                Button("Allow once") { app.respondPermission(request, allow: true, always: false) }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private var friendly: String {
+        switch request.toolName {
+        case "Bash": "the terminal (Bash)"
+        case "WebSearch": "web search"
+        case "Task": "a sub-agent"
+        default: request.toolName
+        }
+    }
 }

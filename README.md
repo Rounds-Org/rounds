@@ -1,6 +1,12 @@
 # Rounds
 
-**Your health researcher. Run on Mac. Powered by Claude Code.**
+**Your health researcher. Runs on your Mac. Powered by Claude Code.**
+
+### ⬇️ [Download the latest release](https://github.com/Rounds-Org/rounds/releases/latest)
+
+> macOS app. Requires [Claude Code](https://claude.com/code) and [Node.js](https://nodejs.org)
+> already installed. First launch: right‑click the app → **Open** (the public builds aren't
+> notarized yet). Or [build from source](#build-from-source).
 
 Clarity about your health.
 
@@ -25,19 +31,22 @@ Rounds is built to pull a family out of that bubble. It reads your records, find
 relevant published evidence, and hands you an argument: *here is your value, here is
 what the guideline says, here is the question to ask, here is the specialist to see.*
 
-That's the whole pitch. It is **not** "AI instead of a doctor." Rounds does not
-diagnose, does not prescribe, and cannot replace a clinician. Its job is to get you to
-the right one, better prepared, with sources in hand.
+That's the whole pitch. It is **not** "AI instead of a doctor." Everything it says is
+grounded in retrieved sources (it names likely causes, odds, tests, and treatment options
+only when a real source backs them — never from the model's memory), it doesn't write
+prescriptions, and it can't replace a clinician. Its job is to get you to the right one,
+better prepared, with sources in hand.
 
 ## Safety principles
 
 These are not aspirations. They are enforced in the shipped build by code, not just by
 asking the model nicely.
 
-1. **No conclusions from images without a text report.** Rounds works from text. It
-   will store and preview a scan, X-ray, or photo, but it will never read a clinical
-   finding out of pixels. If the only basis for a claim is an image, it stops and asks
-   for the written report.
+1. **Images are observations; interpretation comes from sources.** Rounds may look at a
+   photo (a nail, a rash, a printed lab report) and describe what's visible, and it
+   transcribes text from a document photo. But every clinical *interpretation* of what it
+   sees must come from sources it retrieves — and for radiology (X‑ray/CT/MRI/ultrasound)
+   it prefers the written report over reading the imagery.
 2. **Sources only — never from the model's own memory.** Every clinically meaningful
    statement is grounded in retrieved, trust-ranked published sources (or your own
    records), with an inline citation. If no real source supports a claim, Rounds says
@@ -91,12 +100,30 @@ them.
    ```
 2. Install Node.js if you don't have it (`node -v` to check).
 3. Download the latest Rounds build from
-   [Releases](https://github.com/rounds-app/rounds/releases), or build from source in
-   Xcode 15+ (`open rounds.xcodeproj`).
+   [Releases](https://github.com/Rounds-Org/rounds/releases/latest), or build from source
+   (below).
 4. Launch Rounds. Onboarding checks for `claude` and Node, registers the local sources
    tool, and creates your vault at `~/Rounds`.
 5. Drag in a lab report or scan. Rounds will ask a couple of confirming questions, file
    it, and offer to research next steps.
+
+## Build from source
+
+```sh
+git clone https://github.com/Rounds-Org/rounds.git
+cd rounds
+xcodebuild -project rounds.xcodeproj -scheme rounds -configuration Debug -derivedDataPath build build
+open build/Build/Products/Debug/rounds.app
+```
+
+Or just `open rounds.xcodeproj` in Xcode 16+ and hit Run. The "brain" (the contract,
+prompts, and the local sources MCP) is embedded in the app and installed to `~/Rounds`
+on first launch — no external files needed.
+
+### Want a feature?
+
+Rounds is a thin, open client over Claude Code — so the easiest way to extend it is to
+ask your own Claude Code to do it: clone this repo and tell it what you want. PRs welcome.
 
 ## Privacy
 

@@ -52,6 +52,7 @@ nonisolated enum BrainInstaller {
         try write(BrainResources.criticalValues, to: vault.criticalValues)
         try write(BrainResources.redFlagSymptoms, to: vault.brainDir.appendingPathComponent("red-flag-symptoms.json"))
         try write(BrainResources.mcpIndexMjs, to: vault.mcpIndex)
+        try write(BrainResources.permissionHook, to: vault.brainDir.appendingPathComponent("mcp/permission-hook.mjs"))
 
         // mcp.json with the resolved absolute node + server paths.
         let node = toolPaths.node ?? "/usr/bin/env node"

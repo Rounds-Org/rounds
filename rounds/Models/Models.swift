@@ -131,6 +131,7 @@ nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
     var askPlaceholder: String?   // hint text for the answer field
     var answer: String?           // the user's recorded answer (nil until answered)
     var answeredAt: String?       // ISO date the user answered
+    var sources: [Source] = []    // the [S#] sources behind this step (shown on hover)
     var isQuestion: Bool { kind == HypothesisKind.askUser.rawValue }
 }
 

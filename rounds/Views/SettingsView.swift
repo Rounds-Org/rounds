@@ -24,7 +24,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Settings").font(.title2.weight(.semibold))
+                Text("Settings").zfont(.title2, .semibold)
                 Spacer()
                 Button { app.showSettings = false } label: { Image(systemName: "xmark") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
@@ -36,16 +36,35 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     section("Model") {
                         Text("Which Claude model the brain uses. Opus is the deepest reasoner.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                         Picker("", selection: Binding(get: { app.selectedModel }, set: { app.selectedModel = $0 })) {
                             ForEach(RoundsModel.allCases, id: \.self) { Text($0.displayName).tag($0) }
                         }
                         .labelsHidden().pickerStyle(.radioGroup)
                     }
 
+                    section("Appearance") {
+                        Picker("", selection: Binding(get: { app.appearance }, set: { app.appearance = $0 })) {
+                            Text("Light").tag("light")
+                            Text("Dark").tag("dark")
+                            Text("Match system").tag("system")
+                        }
+                        .labelsHidden().pickerStyle(.segmented).frame(maxWidth: 320)
+                        HStack(spacing: 10) {
+                            Text("Text size").zfont(.callout)
+                            Button { app.bumpFontScale(-1) } label: { Image(systemName: "textformat.size.smaller") }
+                            Text(app.fontScaleStep == 0 ? "Default" : (app.fontScaleStep > 0 ? "+\(app.fontScaleStep)" : "\(app.fontScaleStep)"))
+                                .zfont(.caption).foregroundStyle(.secondary).frame(width: 60)
+                            Button { app.bumpFontScale(1) } label: { Image(systemName: "textformat.size.larger") }
+                            Button("Reset") { app.fontScaleStep = 0 }.zfont(.caption).buttonStyle(.borderless)
+                            Spacer()
+                        }
+                        Text("Tip: ⌘+ and ⌘− resize text anywhere in the app.").zfont(.caption2).foregroundStyle(.tertiary)
+                    }
+
                     section("Answer language") {
                         Text("The language Rounds replies in — independent of your documents' language.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                         Picker("", selection: $language) {
                             ForEach(languages, id: \.self) { Text($0).tag($0) }
                             if !languages.contains(language), !language.isEmpty { Text(language).tag(language) }
@@ -55,9 +74,9 @@ struct SettingsView: View {
 
                     section("Your context") {
                         Text("Background about you that helps Rounds reason — habits, past surgeries, allergies, where you live. (You can add the same for family members from their file later.)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                         TextEditor(text: $selfContext)
-                            .font(.callout).frame(height: 90)
+                            .zfont(.callout).frame(height: 90)
                             .padding(6)
                             .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
@@ -65,31 +84,52 @@ struct SettingsView: View {
 
                     section("Custom instructions") {
                         Text("Extra guidance for the brain — e.g. \"be very concise\" or \"explain like I'm not a doctor\". These never override the safety principles.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                         TextEditor(text: $custom)
-                            .font(.callout).frame(height: 90)
+                            .zfont(.callout).frame(height: 90)
                             .padding(6)
                             .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
                     }
 
-                    section("Permissions") {
-                        Text("How Claude Code asks before it reads or changes your records. Rounds can't show Claude Code's own approval prompts, so keep Bypass unless you know why you need otherwise.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Picker("", selection: $permissionMode) {
-                            ForEach(RoundsPermissionMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    section("Claude Code access") {
+                        if app.toolPaths.supportsPermissionHooks {
+                            Toggle(isOn: Binding(get: { app.fullPowerEnabled }, set: { app.fullPowerEnabled = $0 })) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Full Claude Code power").zfont(.callout, .medium)
+                                    Text("Unlock the shell, web search, and sub-agents. Rounds asks your approval before each risky action.")
+                                        .zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }.toggleStyle(.switch).tint(Theme.accent)
+                        } else {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "arrow.up.circle.fill").foregroundStyle(Theme.accent)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Update Claude Code to unlock full power").zfont(.caption, .medium)
+                                    Text("Your Claude Code\(app.toolPaths.claudeVersion.map { " (\($0))" } ?? "") is a bit old. Update it to let Rounds run the shell, web search, and sub-agents with an approval prompt. Until then, Rounds stays in safe mode.")
+                                        .zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                    Link("Update instructions", destination: URL(string: "https://claude.com/code")!).zfont(.caption2)
+                                }
+                            }
+                            .padding(10).background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
                         }
-                        .labelsHidden().pickerStyle(.radioGroup)
-                        Text(permissionMode.blurb).font(.caption2).foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 5) {
+                            permRow("checkmark.circle.fill", Theme.accent, "Always allowed (no prompt)", "Read files · search your records · look up medical sources · file & update your documents")
+                            permRow(app.fullPowerActive ? "hand.raised.fill" : "xmark.octagon.fill",
+                                    Theme.warn,
+                                    app.fullPowerActive ? "Asks first" : "Blocked in safe mode",
+                                    "Shell (Bash) · web search · sub-agents" + (app.fullPowerActive ? " — Rounds shows an Allow/Deny dialog" : ""))
+                        }
+                        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
                     }
 
                     section("Privacy") {
                         Toggle(isOn: Binding(get: { !app.analyticsOptOut }, set: { app.analyticsOptOut = !$0 })) {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("Share anonymous usage stats").font(.callout)
+                                Text("Share anonymous usage stats").zfont(.callout)
                                 Text("Counts and feature events only — never documents, names, or health data.")
-                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .zfont(.caption2).foregroundStyle(.secondary)
                             }
                         }
                         .toggleStyle(.switch).tint(Theme.accent)
@@ -97,20 +137,20 @@ struct SettingsView: View {
 
                     section("Safety contract") {
                         Text("The system prompt Rounds always enforces. It's read-only — your custom instructions are added on top.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                         Button { withAnimation { showContract.toggle() } } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: showContract ? "chevron.down" : "chevron.right").font(.caption2)
+                                Image(systemName: showContract ? "chevron.down" : "chevron.right").zfont(.caption2)
                                 Text(showContract ? "Hide the safety contract" : "View the safety contract")
                                 Spacer()
                             }
-                            .font(.callout).contentShape(Rectangle())
+                            .zfont(.callout).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .pointerStyle(.link)
                         if showContract {
                             ScrollView {
-                                Text(app.contractText).font(.system(.caption, design: .monospaced))
+                                Text(app.contractText).zfont(.caption, design: .monospaced)
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -122,7 +162,7 @@ struct SettingsView: View {
 
                     section("Reset") {
                         Text("Erase everything Rounds has stored — all documents, people, next steps, chats, and settings — and start over as a brand-new user. Claude Code and Node stay installed. This can't be undone.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .zfont(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button(role: .destructive) { confirmWipe = true } label: {
                             HStack(spacing: 6) {
@@ -171,6 +211,16 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader(title: title)
             content()
+        }
+    }
+
+    private func permRow(_ icon: String, _ color: Color, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color).zfont(.callout)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).zfont(.caption, .medium)
+                Text(detail).zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

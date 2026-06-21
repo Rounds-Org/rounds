@@ -42,10 +42,10 @@ struct FileTabContent: View {
                 Image(systemName: doc.isImaging ? "photo" : "doc.text").foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(titleWithPerson)
-                        .font(.headline)
+                        .zfont(.headline)
                     HStack(spacing: 6) {
-                        if let d = doc.testDate { Text(d).font(.caption).foregroundStyle(.secondary) }
-                        if let lab = doc.sourceLab { Text("· \(lab)").font(.caption).foregroundStyle(.tertiary) }
+                        if let d = doc.testDate { Text(d).zfont(.caption).foregroundStyle(.secondary) }
+                        if let lab = doc.sourceLab { Text("· \(lab)").zfont(.caption).foregroundStyle(.tertiary) }
                     }
                 }
                 Spacer()
@@ -60,7 +60,7 @@ struct FileTabContent: View {
                 HStack(spacing: 7) {
                     Image(systemName: "info.circle").foregroundStyle(Theme.warn)
                     Text("This is an image with no written report — Rounds stores it but won't draw conclusions from the picture.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .zfont(.caption).foregroundStyle(.secondary)
                     Spacer()
                 }
                 .padding(10).background(Theme.warn.opacity(0.08))
@@ -69,5 +69,18 @@ struct FileTabContent: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.bg)
+        .overlay(alignment: .bottomTrailing) {
+            Button { app.chatAboutFile(doc) } label: {
+                Label("Chat about this", systemImage: "bubble.left.and.text.bubble.right")
+                    .zfont(.callout, .medium)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
+            .padding(20)
+        }
     }
 }

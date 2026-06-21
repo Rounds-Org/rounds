@@ -16,10 +16,10 @@ struct SourcesPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Sources").font(.headline)
+                Text("Sources").zfont(.headline)
                 if !app.currentSources.isEmpty {
                     Text("\(app.currentSources.count)")
-                        .font(.caption.weight(.medium))
+                        .zfont(.caption, .medium)
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
                 }
@@ -38,7 +38,7 @@ struct SourcesPanel: View {
             if let warning = app.sourcesWarning {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.warn)
-                    Text(warning).font(.caption).foregroundStyle(Theme.warn)
+                    Text(warning).zfont(.caption).foregroundStyle(Theme.warn)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -51,7 +51,7 @@ struct SourcesPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The numbers match the [n] marks in the answer. Ranked by evidence strength.")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .zfont(.caption2).foregroundStyle(.tertiary)
                         ForEach(app.currentSources) { SourceCard(source: $0) }
                     }
                     .padding(12)
@@ -66,11 +66,11 @@ struct SourcesPanel: View {
     private var empty: some View {
         VStack(spacing: 10) {
             Image(systemName: "books.vertical")
-                .font(.system(size: 28)).foregroundStyle(.secondary)
+                .zfont(size: 28).foregroundStyle(.secondary)
             Text("Sources appear here")
-                .font(.callout).foregroundStyle(.secondary)
+                .zfont(.callout).foregroundStyle(.secondary)
             Text("Rounds backs every clinical statement with trust-ranked sources — guidelines and systematic reviews rank above case reports and preprints.")
-                .font(.caption).foregroundStyle(.tertiary)
+                .zfont(.caption).foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
         }
         .padding(20)
@@ -88,13 +88,13 @@ private struct TierLegend: View {
     ]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Trust tiers").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text("Trust tiers").zfont(.caption, .semibold).foregroundStyle(.secondary)
             // A simple vertical list (not a fixed-column table) so nothing clips in the narrow rail.
             ForEach(rows, id: \.badge) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     TierBadge(tier: row.badge)
                     Text(row.desc)
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .zfont(.caption2).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -114,26 +114,26 @@ struct SourceCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("\(number).")
-                    .font(.caption.weight(.medium).monospacedDigit())
+                    .zfont(.caption, .medium).monospacedDigit()
                     .foregroundStyle(.secondary)
                 TierBadge(tier: source.trustTier)
                 Spacer()
-                if let y = source.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
+                if let y = source.year { Text(String(y)).zfont(.caption2).foregroundStyle(.secondary) }
             }
-            Text(source.title).font(.callout.weight(.medium)).lineLimit(4)
+            Text(source.title).zfont(.callout, .medium).lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
             if let why = source.whyTrusted {
-                Text(why).font(.caption).foregroundStyle(.secondary)
+                Text(why).zfont(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
-                if let j = source.journal { Text(j).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
-                if let c = source.citedBy, c > 0 { Text("· \(c) cited").font(.caption2).foregroundStyle(.tertiary) }
+                if let j = source.journal { Text(j).zfont(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+                if let c = source.citedBy, c > 0 { Text("· \(c) cited").zfont(.caption2).foregroundStyle(.tertiary) }
                 Spacer()
                 if let urlStr = source.url, let url = URL(string: urlStr) {
                     Link(destination: url) {
                         HStack(spacing: 3) { Text("Open"); Image(systemName: "arrow.up.right") }
-                            .font(.caption2.weight(.medium))
+                            .zfont(.caption2, .medium)
                     }
                     .foregroundStyle(Theme.accent)
                 }

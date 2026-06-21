@@ -307,6 +307,23 @@ nonisolated enum VaultStore {
         }()
         let askPlaceholder = (obj["ask"] as? [String: Any])?["placeholder"] as? String
             ?? obj["askPlaceholder"] as? String
+        let sources: [Source] = (obj["sources"] as? [[String: Any]] ?? []).map { s in
+            let doi = s["doi"] as? String
+            let pmid = (s["pmid"] as? String) ?? (s["pmid"] as? NSNumber).map { "\($0)" }
+            let url = (s["url"] as? String)
+                ?? doi.map { "https://doi.org/\($0)" }
+                ?? pmid.map { "https://pubmed.ncbi.nlm.nih.gov/\($0)/" }
+            return Source(
+                id: (s["id"] as? String) ?? "S?",
+                title: (s["ref"] as? String) ?? (s["citation"] as? String) ?? (s["title"] as? String) ?? "Source",
+                url: url,
+                type: s["type"] as? String,
+                trustTier: (s["tier"] as? String) ?? (s["trustTier"] as? String) ?? "—",
+                year: (s["year"] as? Int) ?? (s["year"] as? NSNumber)?.intValue,
+                journal: s["journal"] as? String,
+                citedBy: (s["citedBy"] as? Int) ?? (s["citedBy"] as? NSNumber)?.intValue,
+                whyTrusted: s["whyTrusted"] as? String)
+        }
         return Hypothesis(
             id: (obj["id"] as? String) ?? UUID().uuidString,
             title: (obj["title"] as? String) ?? "Next step",
@@ -321,7 +338,8 @@ nonisolated enum VaultStore {
             complaintId: (obj["complaintId"] as? String) ?? (obj["complaint_id"] as? String),
             askPlaceholder: askPlaceholder,
             answer: obj["answer"] as? String,
-            answeredAt: (obj["answeredAt"] as? String) ?? (obj["answered_at"] as? String))
+            answeredAt: (obj["answeredAt"] as? String) ?? (obj["answered_at"] as? String),
+            sources: sources)
     }
 
     static func priorityRank(_ p: String) -> Int {

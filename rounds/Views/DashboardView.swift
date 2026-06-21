@@ -12,6 +12,7 @@ struct DashboardView: View {
     @Environment(AppState.self) private var app
     @State private var ask = ""
     @State private var askRefs: [Reference] = []
+    @State private var stepPersonFilter: String?   // nil = everyone
 
     var body: some View {
         ScrollView {
@@ -38,6 +39,8 @@ struct DashboardView: View {
                     archivedSteps
                 }
 
+                featureBanner
+
                 Spacer(minLength: 24)
             }
             .padding(28)
@@ -51,12 +54,11 @@ struct DashboardView: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.displayName.isEmpty ? "Hello" : "Hello, \(app.displayName)")
-                    .font(.largeTitle.weight(.semibold))
+                    .zfont(.largeTitle, .semibold)
                 Text("Your health researcher. Describe a symptom, drop a document, or ask a question.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .zfont(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            ModelPicker()
         }
     }
 
@@ -66,9 +68,9 @@ struct DashboardView: View {
                 HStack(spacing: 6) {
                     ForEach(askRefs) { ref in
                         HStack(spacing: 4) {
-                            Image(systemName: ref.iconName).font(.caption2)
-                            Text(ref.label).font(.caption2).lineLimit(1)
-                            Button { askRefs.removeAll { $0 == ref } } label: { Image(systemName: "xmark").font(.system(size: 8)) }
+                            Image(systemName: ref.iconName).zfont(.caption2)
+                            Text(ref.label).zfont(.caption2).lineLimit(1)
+                            Button { askRefs.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
                                 .buttonStyle(.borderless)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
@@ -79,8 +81,7 @@ struct DashboardView: View {
             MentionField(text: $ask, references: $askRefs,
                          placeholder: "Describe a symptom, ask about a result, or @-reference…",
                          onSend: submit)
-            Text("Research tool grounded in sources — not medical advice, and it can be wrong.")
-                .font(.caption2).foregroundStyle(.tertiary)
+            InputControls()
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
@@ -133,16 +134,35 @@ struct DashboardView: View {
                 SectionHeader(title: "Next steps")
                 if questionCount > 0 {
                     Text("\(questionCount) to answer")
-                        .font(.caption2.weight(.medium))
+                        .zfont(.caption2, .medium)
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
                 }
                 Spacer()
+                if app.people.count > 1 {
+                    Menu {
+                        Button { stepPersonFilter = nil } label: { Label("Everyone", systemImage: stepPersonFilter == nil ? "checkmark" : "") }
+                        Divider()
+                        ForEach(app.people) { p in
+                            Button { stepPersonFilter = p.slug } label: {
+                                Label(p.displayName, systemImage: stepPersonFilter == p.slug ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.crop.circle").zfont(.caption2)
+                            Text(stepPersonFilter.flatMap { pf in app.people.first { $0.slug == pf }?.displayName } ?? "Everyone")
+                                .zfont(.caption)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton).fixedSize()
+                }
                 if app.identifyingNextSteps {
                     IdentifyingIndicator()
                 } else if !app.documents.isEmpty {
                     Button { app.beginHypotheses() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+                        .buttonStyle(.borderless).zfont(.caption).foregroundStyle(.secondary)
                         .help("Refresh next steps")
                         .disabled(app.isStreaming)
                 }
@@ -150,7 +170,7 @@ struct DashboardView: View {
 
             if activeHypotheses.isEmpty {
                 if app.identifyingNextSteps {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Working through your records…").font(.callout).foregroundStyle(.secondary) }
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Working through your records…").zfont(.callout).foregroundStyle(.secondary) }
                         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
                 } else {
@@ -163,7 +183,10 @@ struct DashboardView: View {
     }
 
     private var archivedSet: Set<String> { ["superseded", "done", "dismissed"] }
-    private var activeHypotheses: [Hypothesis] { app.hypotheses.filter { !archivedSet.contains($0.status) } }
+    private var activeHypotheses: [Hypothesis] {
+        app.hypotheses.filter { !archivedSet.contains($0.status) }
+            .filter { stepPersonFilter == nil || $0.personId == stepPersonFilter }
+    }
     private var questionCount: Int { activeHypotheses.filter { $0.isQuestion && ($0.answer?.isEmpty ?? true) }.count }
     private var archivedHypotheses: [Hypothesis] { app.hypotheses.filter { archivedSet.contains($0.status) } }
 
@@ -173,10 +196,10 @@ struct DashboardView: View {
             Button { withAnimation { showArchived.toggle() } } label: {
                 HStack {
                     SectionHeader(title: "Archived steps")
-                    Text("\(archivedHypotheses.count)").font(.caption2).foregroundStyle(.tertiary)
+                    Text("\(archivedHypotheses.count)").zfont(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Image(systemName: showArchived ? "chevron.up" : "chevron.down")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .zfont(.caption2).foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())   // whole header row is the hit target
             }
@@ -203,20 +226,20 @@ struct DashboardView: View {
                 Image(systemName: app.documents.isEmpty ? "tray.and.arrow.down.fill" : "checkmark.seal.fill")
                     .foregroundStyle(app.documents.isEmpty ? Theme.accent : .green)
                 Text(app.documents.isEmpty ? "Let's get started" : "You're all caught up")
-                    .font(.callout.weight(.semibold))
+                    .zfont(.callout, .semibold)
             }
             Text(app.documents.isEmpty
                  ? "Add a health record and Rounds will read it on your Mac, file it, and propose the right next steps — nothing leaves your computer."
                  : "No open next steps right now — that's a good place to be. Add more records and Rounds will find what's worth doing next.")
-                .font(.caption).foregroundStyle(.secondary)
+                .zfont(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("Helpful things to add").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                Text("Helpful things to add").zfont(.caption2, .semibold).foregroundStyle(.tertiary)
                 ForEach(suggestedDocs, id: \.1) { icon, label in
                     HStack(spacing: 7) {
-                        Image(systemName: icon).font(.caption2).foregroundStyle(Theme.accent).frame(width: 16)
-                        Text(label).font(.caption).foregroundStyle(.secondary)
+                        Image(systemName: icon).zfont(.caption2).foregroundStyle(Theme.accent).frame(width: 16)
+                        Text(label).zfont(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -227,7 +250,7 @@ struct DashboardView: View {
             Text(app.documents.isEmpty
                  ? "Drag any of these onto the window — or describe a symptom in the box above."
                  : "Drag a new record onto the window, or ask a question above.")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .zfont(.caption2).foregroundStyle(.tertiary)
             if !app.documents.isEmpty {
                 Button { app.beginHypotheses() } label: { Label("Find next steps now", systemImage: "sparkles") }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
@@ -236,6 +259,22 @@ struct DashboardView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var featureBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wand.and.stars").zfont(.caption).foregroundStyle(.secondary)
+            Text("Want a feature? Rounds is open source — ask your Claude Code to clone the repo and build it for you.")
+                .zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button {
+                if let url = URL(string: "https://github.com/Rounds-Org/rounds") { NSWorkspace.shared.open(url) }
+            } label: { Label("Open repo", systemImage: "arrow.up.right.square") }
+                .zfont(.caption2).buttonStyle(.borderless).tint(Theme.accent)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Theme.panel.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.hairline))
     }
 
     private var recentChats: some View {
@@ -250,10 +289,11 @@ struct DashboardView: View {
                         if app.isChatStreaming(chat.id) {
                             HStack(spacing: 5) {
                                 ProgressView().controlSize(.mini)
-                                Text("working…").font(.caption2).foregroundStyle(Theme.accent)
+                                Text("working…").zfont(.caption2).foregroundStyle(Theme.accent)
                             }
                         } else {
-                            Text(chat.updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
+                            Text(chat.updatedAt.formatted(.relative(presentation: .named)))
+                                .zfont(.caption2).foregroundStyle(.tertiary)
                         }
                     }
                     .padding(.vertical, 7).padding(.horizontal, 10)
@@ -280,11 +320,11 @@ struct UrgentBanner: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.white)
             VStack(alignment: .leading, spacing: 2) {
-                Text(alert.message).font(.callout.weight(.semibold)).foregroundStyle(.white)
+                Text(alert.message).zfont(.callout, .semibold).foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
                 if let m = alert.marker {
                     Text(m + (alert.value.map { ": \($0)" } ?? "") + (alert.basis.map { " · \($0)" } ?? ""))
-                        .font(.caption2).foregroundStyle(.white.opacity(0.85))
+                        .zfont(.caption2).foregroundStyle(.white.opacity(0.85))
                 }
             }
             Spacer()
@@ -311,7 +351,7 @@ struct ComplaintCard: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "stethoscope").foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(complaint.title).font(.headline).lineLimit(2)
+                    Text(complaint.title).zfont(.headline).lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                     statusLine
                 }
@@ -331,13 +371,13 @@ struct ComplaintCard: View {
     @ViewBuilder private var statusLine: some View {
         if openQuestions > 0 {
             Text("\(openQuestions) quick question\(openQuestions > 1 ? "s" : "") to answer below in Next steps")
-                .font(.caption).foregroundStyle(Theme.accent)
+                .zfont(.caption).foregroundStyle(Theme.accent)
         } else if app.identifyingNextSteps {
-            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Thinking it through…").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Thinking it through…").zfont(.caption).foregroundStyle(.secondary) }
         } else if linked.isEmpty {
-            Text("Reviewing your concern…").font(.caption).foregroundStyle(.secondary)
+            Text("Reviewing your concern…").zfont(.caption).foregroundStyle(.secondary)
         } else {
-            Text("Your next steps for this are below.").font(.caption).foregroundStyle(.secondary)
+            Text("Your next steps for this are below.").zfont(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -353,7 +393,7 @@ struct IdentifyingIndicator: View {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
                 Text(app.nextStepsStatus.isEmpty ? "Identifying next steps…" : app.nextStepsStatus)
-                    .font(.caption.weight(.medium)).foregroundStyle(Theme.accent).lineLimit(1)
+                    .zfont(.caption, .medium).foregroundStyle(Theme.accent).lineLimit(1)
                     .underline(hovering)
             }
             .contentShape(Rectangle())
@@ -387,23 +427,23 @@ struct HypothesisCard: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 if let person = personLabel {
-                    Label(person, systemImage: "person").font(.caption2).foregroundStyle(Theme.accent)
+                    Label(person, systemImage: "person").zfont(.caption2).foregroundStyle(Theme.accent)
                 }
                 HStack(spacing: 5) {
-                    Image(systemName: "bubble.left.and.text.bubble.right").font(.caption2)
-                    Text("A quick question").font(.caption2.weight(.semibold))
+                    Image(systemName: "bubble.left.and.text.bubble.right").zfont(.caption2)
+                    Text("A quick question").zfont(.caption2, .semibold)
                 }
                 .foregroundStyle(Theme.accent)
-                Text(hyp.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                Text(hyp.title).zfont(.headline).fixedSize(horizontal: false, vertical: true)
                 if !hyp.whyNow.isEmpty {
-                    Text(hyp.whyNow).font(.callout).foregroundStyle(.secondary)
+                    Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if app.answeringStep == hyp.id {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Recording your answer and updating your next steps…").font(.caption).foregroundStyle(.secondary)
+                    Text("Recording your answer and updating your next steps…").zfont(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 TextField(hyp.askPlaceholder ?? "Your answer — a sentence or two is plenty", text: $draft, axis: .vertical)
@@ -413,7 +453,7 @@ struct HypothesisCard: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
                 HStack {
                     Button("Chat about this instead") { app.chatAbout(hyp) }
-                        .font(.caption).buttonStyle(.borderless).tint(Theme.accent)
+                        .zfont(.caption).buttonStyle(.borderless).tint(Theme.accent)
                     Spacer()
                     Button {
                         let a = draft; draft = ""
@@ -430,15 +470,15 @@ struct HypothesisCard: View {
     private var answeredBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
-                Image(systemName: "checkmark.bubble").font(.caption2)
-                Text("Answered" + (hyp.answeredAt.map { " · \($0)" } ?? "")).font(.caption2)
+                Image(systemName: "checkmark.bubble").zfont(.caption2)
+                Text("Answered" + (hyp.answeredAt.map { " · \($0)" } ?? "")).zfont(.caption2)
                 Spacer()
             }
             .foregroundStyle(.tertiary)
-            Text(hyp.title).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            Text(hyp.title).zfont(.subheadline, .medium).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let a = hyp.answer, !a.isEmpty {
-                Text(a).font(.callout)
+                Text(a).zfont(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
@@ -452,11 +492,11 @@ struct HypothesisCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if let person = personLabel {
                         Label(person, systemImage: "person")
-                            .font(.caption2).foregroundStyle(Theme.accent)
+                            .zfont(.caption2).foregroundStyle(Theme.accent)
                     }
-                    Text(hyp.title).font(.headline)
+                    Text(hyp.title).zfont(.headline)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(hyp.whyNow).font(.callout).foregroundStyle(.secondary)
+                    Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .contentShape(Rectangle())
@@ -466,27 +506,23 @@ struct HypothesisCard: View {
             }
             HStack(spacing: 8) {
                 Pill(text: hyp.kind.replacingOccurrences(of: "-", with: " "))
-                if let tier = hyp.topTier { TierBadge(tier: tier) }
-                if hyp.sourceCount > 0 {
-                    Label("\(hyp.sourceCount) sources", systemImage: "doc.text.magnifyingglass")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
+                if hyp.sourceCount > 0 { SourcesHoverLabel(hyp: hyp) }
                 Spacer()
                 Button(expanded ? "Hide" : "Details") { withAnimation { expanded.toggle() } }
-                    .font(.caption).buttonStyle(.borderless)
+                    .zfont(.caption).buttonStyle(.borderless)
                 Button("Chat about this") { app.chatAbout(hyp) }
-                    .font(.caption.weight(.medium)).buttonStyle(.borderless).tint(Theme.accent)
+                    .zfont(.caption, .medium).buttonStyle(.borderless).tint(Theme.accent)
             }
             if expanded {
                 if let body = hyp.body {
                     Divider()
-                    MarkdownText(stripFrontMatter(body)).font(.callout)
+                    MarkdownText(stripFrontMatter(body)).zfont(.callout)
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Questions? Need clarification? Any ideas?")
-                        .font(.callout.weight(.medium))
+                        .zfont(.callout, .medium)
                     Text("Talk it through with Rounds — refine this step, ask what a result would mean, or decide it's already handled.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .zfont(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button { app.chatAbout(hyp) } label: {
                         Label("Chat about this", systemImage: "bubble.left.and.text.bubble.right")
@@ -516,5 +552,62 @@ struct HypothesisCard: View {
         guard md.hasPrefix("---") else { return md }
         let parts = md.components(separatedBy: "---")
         return parts.count >= 3 ? parts[2...].joined(separator: "---").trimmingCharacters(in: .whitespacesAndNewlines) : md
+    }
+}
+
+/// The "N sources" label on a next-step card: underlines on hover, opens a popover of clickable
+/// source cards on CLICK. The popover dismisses when you click outside it.
+struct SourcesHoverLabel: View {
+    let hyp: Hypothesis
+    @State private var show = false
+    @State private var hovering = false
+
+    var body: some View {
+        Button { show.toggle() } label: {
+            Label("\(hyp.sourceCount) source\(hyp.sourceCount == 1 ? "" : "s")", systemImage: "doc.text.magnifyingglass")
+                .zfont(.caption2).foregroundStyle(.secondary)
+                .underline(hovering)
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .onHover { hovering = $0 }
+        .popover(isPresented: $show, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sources").zfont(.caption, .semibold).foregroundStyle(.secondary)
+                if hyp.sources.isEmpty {
+                    Text("Open “Details” to see the citations behind this step.")
+                        .zfont(.caption2).foregroundStyle(.secondary)
+                } else {
+                    ForEach(hyp.sources) { MiniSourceCard(source: $0) }
+                }
+            }
+            .padding(12).frame(width: 330)
+        }
+    }
+}
+
+/// A compact, clickable source card (opens the DOI/PubMed link).
+struct MiniSourceCard: View {
+    let source: Source
+    var body: some View {
+        Button {
+            if let u = source.url, let url = URL(string: u) { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Text(source.id.replacingOccurrences(of: "S", with: "")).zfont(.caption2, .bold)
+                    .foregroundStyle(Theme.accent).frame(width: 18, height: 18).background(Circle().fill(Theme.accentSoft))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(source.title).zfont(.caption2, .medium).lineLimit(3).multilineTextAlignment(.leading)
+                    HStack(spacing: 5) {
+                        TierBadge(tier: source.trustTier)
+                        if let y = source.year { Text(String(y)).zfont(.caption2).foregroundStyle(.secondary) }
+                        if source.url != nil { Image(systemName: "arrow.up.right.square").zfont(.caption2).foregroundStyle(Theme.accent) }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

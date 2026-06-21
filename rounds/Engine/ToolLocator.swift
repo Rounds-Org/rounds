@@ -13,9 +13,31 @@ nonisolated struct ToolPaths: Sendable {
     var claude: String?
     var node: String?
     var path: String
+    var claudeVersion: String?   // e.g. "2.1.172"
 
     var claudeInstalled: Bool { claude != nil }
     var nodeInstalled: Bool { node != nil }
+
+    /// PreToolUse hooks that return a permission decision (so Rounds can show Allow/Deny dialogs and
+    /// unlock the full Claude Code toolset) need a recent enough Claude Code. Below this → safe mode.
+    static let minVersionForPermissionHooks = (2, 0, 0)
+    var supportsPermissionHooks: Bool {
+        guard let v = ToolPaths.parseVersion(claudeVersion) else { return false }
+        return v >= ToolPaths.minVersionForPermissionHooks
+    }
+
+    static func parseVersion(_ s: String?) -> (Int, Int, Int)? {
+        guard let s else { return nil }
+        let nums = s.split(whereSeparator: { !"0123456789".contains($0) }).compactMap { Int($0) }
+        guard nums.count >= 1 else { return nil }
+        return (nums[0], nums.count > 1 ? nums[1] : 0, nums.count > 2 ? nums[2] : 0)
+    }
+}
+
+func >= (l: (Int, Int, Int), r: (Int, Int, Int)) -> Bool {
+    if l.0 != r.0 { return l.0 > r.0 }
+    if l.1 != r.1 { return l.1 > r.1 }
+    return l.2 >= r.2
 }
 
 nonisolated enum ToolLocator {
@@ -60,7 +82,16 @@ nonisolated enum ToolLocator {
         for e in extra where !parts.contains(e) { parts.append(e) }
         path = parts.joined(separator: ":")
 
-        return ToolPaths(claude: claude, node: node, path: path)
+        var version: String?
+        if let claude {
+            let out = await runLoginShell("\"\(claude)\" --version 2>/dev/null")
+            // e.g. "2.1.172 (Claude Code)"
+            if let m = out.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) {
+                version = String(out[m])
+            }
+        }
+
+        return ToolPaths(claude: claude, node: node, path: path, claudeVersion: version)
     }
 
     static func runLoginShell(_ script: String) async -> String {

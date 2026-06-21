@@ -29,6 +29,28 @@ nonisolated enum RoundsModel: String, CaseIterable, Sendable, Codable {
     }
 }
 
+/// Reasoning effort for the run (`claude --effort`). Higher = more thinking, slower. `default` skips
+/// the flag (uses the model's own default).
+nonisolated enum RoundsEffort: String, CaseIterable, Sendable, Codable {
+    case `default`, low, medium, high, xhigh, max
+    var short: String {
+        switch self {
+        case .default: "Auto"; case .low: "Low"; case .medium: "Med"
+        case .high: "High"; case .xhigh: "X-High"; case .max: "Max"
+        }
+    }
+    var displayName: String {
+        switch self {
+        case .default: "Auto — the model's default reasoning"
+        case .low: "Low — fastest, least thinking"
+        case .medium: "Medium"
+        case .high: "High — more thorough"
+        case .xhigh: "Extra high"
+        case .max: "Max — deepest reasoning, slowest"
+        }
+    }
+}
+
 /// Claude Code permission mode. `bypass` runs allowed tools with no prompts (Rounds can't surface
 /// the CLI's interactive permission prompt), while `--disallowedTools` still HARD-removes Bash/Task/
 /// WebSearch — so file writes & source lookups just work, but the dangerous tools stay off.
@@ -57,6 +79,7 @@ nonisolated enum RoundsEvent: Sendable {
     case textDelta(String)
     case toolUse(name: String, input: String)
     case toolResult(String)
+    case usage(outputTokens: Int)   // cumulative output tokens for the current message (live counter)
     case finished(text: String, sessionId: String, isError: Bool, costUSD: Double)
     case failed(String)
 }
@@ -89,6 +112,7 @@ nonisolated struct ClaudeRun: Sendable {
     var toolPaths: ToolPaths
     var includePartial: Bool = true
     var permissionMode: RoundsPermissionMode = .bypass
+    var effort: RoundsEffort = .default
 }
 
 nonisolated enum ClaudeEngine {
@@ -110,6 +134,7 @@ nonisolated enum ClaudeEngine {
                         "--verbose",
                         "--model", run.model.rawValue]
             if run.includePartial { args += ["--include-partial-messages"] }
+            if run.effort != .default { args += ["--effort", run.effort.rawValue] }
             args += ["--permission-mode", run.permissionMode.rawValue]
             if let mcp = run.mcpConfigPath { args += ["--strict-mcp-config", "--mcp-config", mcp] }
             if let settings = run.settingsPath { args += ["--settings", settings] }
@@ -236,20 +261,32 @@ nonisolated enum EventMapper {
             return []
 
         case "stream_event":
-            // Token-by-token deltas for the live typing feel.
-            if let event = obj["event"] as? [String: Any],
-               (event["type"] as? String) == "content_block_delta",
-               let delta = event["delta"] as? [String: Any],
-               let text = delta["text"] as? String {
-                return [.textDelta(text)]
+            // Token-by-token deltas for the live typing feel + live token usage for the counter.
+            if let event = obj["event"] as? [String: Any] {
+                let et = event["type"] as? String
+                if et == "content_block_delta",
+                   let delta = event["delta"] as? [String: Any],
+                   let text = delta["text"] as? String {
+                    return [.textDelta(text)]
+                }
+                if et == "message_delta", let ot = intOf((event["usage"] as? [String: Any])?["output_tokens"]) {
+                    return [.usage(outputTokens: ot)]
+                }
+                if et == "message_start",
+                   let ot = intOf(((event["message"] as? [String: Any])?["usage"] as? [String: Any])?["output_tokens"]) {
+                    return [.usage(outputTokens: ot)]
+                }
             }
             return []
 
         case "assistant":
-            // Capture tool calls (text is already covered by deltas).
+            // Capture tool calls (text is already covered by deltas) + the message's final token count.
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return [] }
             var events: [RoundsEvent] = []
+            if let ot = intOf((message["usage"] as? [String: Any])?["output_tokens"]) {
+                events.append(.usage(outputTokens: ot))
+            }
             for block in content {
                 if (block["type"] as? String) == "tool_use",
                    let name = block["name"] as? String {
@@ -288,5 +325,13 @@ nonisolated enum EventMapper {
             return arr.compactMap { $0["text"] as? String }.joined(separator: "\n")
         }
         return ""
+    }
+
+    static func intOf(_ v: Any?) -> Int? {
+        if let i = v as? Int { return i }
+        if let n = v as? NSNumber { return n.intValue }
+        if let d = v as? Double { return Int(d) }
+        if let s = v as? String { return Int(s) }
+        return nil
     }
 }

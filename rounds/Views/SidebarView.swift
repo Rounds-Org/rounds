@@ -33,13 +33,16 @@ struct SidebarView: View {
     @State private var importing = false
     @State private var showGroupPicker = false
     @State private var pendingDelete: MedDocument?
+    @State private var searchQuery = ""
+    @State private var personFilter: String?   // nil = everyone
+    @State private var collapsedGroups: Set<String> = []
     @State private var sidebarHeight: CGFloat = 600     // measured, to cap the in-progress tray
     @State private var queueContentHeight: CGFloat = 0  // measured in-progress content height
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Rounds").font(.headline)
+                Text("Rounds").zfont(.headline)
                 Spacer()
                 Button { app.showSettings = true } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless).foregroundStyle(.secondary)
@@ -86,6 +89,7 @@ struct SidebarView: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, .image, .plainText, .item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { app.beginImport(urls) }
         }
+        .background(Theme.bg)   // opaque sidebar (not the translucent default material)
         .confirmationDialog("Delete this document?",
                             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
                             presenting: pendingDelete) { doc in
@@ -108,15 +112,44 @@ struct SidebarView: View {
             }
         } else {
             VStack(spacing: 0) {
+                docFilterBar
                 groupByControl
+                if groups.isEmpty {
+                    VStack(spacing: 5) {
+                        Spacer(minLength: 0)
+                        Image(systemName: "magnifyingglass").zfont(.title3).foregroundStyle(.tertiary)
+                        Text("No documents match").zfont(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
                 List {
                     ForEach(groups, id: \.0) { (key, docs) in
-                        Section(header: Text(key)) {
-                            ForEach(docs) { doc in DocRow(doc: doc, onDelete: { pendingDelete = doc }) }
+                        Section {
+                            if !collapsedGroups.contains(key) {
+                                ForEach(docs) { doc in DocRow(doc: doc, onDelete: { pendingDelete = doc }) }
+                            }
+                        } header: {
+                            Button {
+                                if collapsedGroups.contains(key) { collapsedGroups.remove(key) }
+                                else { collapsedGroups.insert(key) }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: collapsedGroups.contains(key) ? "chevron.right" : "chevron.down")
+                                        .zfont(size: 9).foregroundStyle(.secondary)
+                                    Text(key)
+                                    Spacer()
+                                    Text("\(docs.count)").zfont(.caption2).foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)   // drop the translucent sidebar material…
+                .background(Theme.bg)                // …for a solid, opaque panel
+                }
             }
         }
     }
@@ -124,10 +157,10 @@ struct SidebarView: View {
     private var compactDocsPlaceholder: some View {
         VStack(spacing: 6) {
             Spacer(minLength: 0)
-            Image(systemName: "tray.and.arrow.down").font(.system(size: 22)).foregroundStyle(.secondary)
-            Text("Your filed documents will appear here").font(.callout).foregroundStyle(.secondary)
+            Image(systemName: "tray.and.arrow.down").zfont(size: 22).foregroundStyle(.secondary)
+            Text("Your filed documents will appear here").zfont(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Text("Grouped by person, type and date.").font(.caption2).foregroundStyle(.tertiary)
+            Text("Grouped by person, type and date.").zfont(.caption2).foregroundStyle(.tertiary)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -146,7 +179,7 @@ struct SidebarView: View {
                 SectionHeader(title: "Files in progress")
                 Spacer()
                 Text("\(app.processingFiles.count)")
-                    .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                    .zfont(.caption2, .medium).foregroundStyle(.secondary)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Theme.bg, in: Capsule())
             }
@@ -165,13 +198,56 @@ struct SidebarView: View {
         .padding(.bottom, 8)
     }
 
+    private var docFilterBar: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").zfont(.caption2).foregroundStyle(.secondary)
+                TextField("Search by name, type, date…", text: $searchQuery)
+                    .textFieldStyle(.plain).zfont(.caption)
+                if !searchQuery.isEmpty {
+                    Button { searchQuery = "" } label: { Image(systemName: "xmark.circle.fill").zfont(.caption2) }
+                        .buttonStyle(.borderless).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(Theme.bg, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.hairline))
+
+            if app.people.count > 1 {
+                Menu {
+                    Button { personFilter = nil } label: { Label("Everyone", systemImage: personFilter == nil ? "checkmark" : "") }
+                    Divider()
+                    ForEach(app.people) { p in
+                        Button { personFilter = p.slug } label: {
+                            Label(p.displayName, systemImage: personFilter == p.slug ? "checkmark" : "")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "person.crop.circle").zfont(.caption2)
+                        Text(personFilter.flatMap { pf in app.people.first { $0.slug == pf }?.displayName } ?? "Everyone")
+                            .zfont(.caption).lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down").zfont(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(Theme.bg, in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.hairline))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 6)
+    }
+
     private var groupByControl: some View {
         Button { showGroupPicker = true } label: {
             HStack(spacing: 6) {
-                Image(systemName: groupBy.icon).font(.caption)
-                Text("Grouped by \(groupBy.title.lowercased())").font(.caption)
+                Image(systemName: groupBy.icon).zfont(.caption)
+                Text("Grouped by \(groupBy.title.lowercased())").zfont(.caption)
                 Spacer()
-                Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                Image(systemName: "chevron.up.chevron.down").zfont(.caption2)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10).padding(.vertical, 6)
@@ -183,7 +259,7 @@ struct SidebarView: View {
         .popover(isPresented: $showGroupPicker, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Group your artifacts by")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .zfont(.caption, .semibold).foregroundStyle(.secondary)
                     .padding(.bottom, 4)
                 ForEach(GroupBy.allCases) { option in
                     Button { groupBy = option; showGroupPicker = false } label: {
@@ -192,8 +268,8 @@ struct SidebarView: View {
                                 .foregroundStyle(groupBy == option ? Theme.accent : .secondary)
                             Image(systemName: option.icon).foregroundStyle(.secondary).frame(width: 18)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(option.title).font(.callout)
-                                Text(option.subtitle).font(.caption2).foregroundStyle(.secondary)
+                                Text(option.title).zfont(.callout)
+                                Text(option.subtitle).zfont(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
                         }
@@ -212,11 +288,11 @@ struct SidebarView: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 30)).foregroundStyle(.secondary)
+                .zfont(size: 30).foregroundStyle(.secondary)
             Text("Drop documents here")
-                .font(.callout).foregroundStyle(.secondary)
+                .zfont(.callout).foregroundStyle(.secondary)
             Text("Labs, reports, discharge summaries — Rounds files them by person, type and date.")
-                .font(.caption).foregroundStyle(.tertiary)
+                .zfont(.caption).foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
             Button("Choose files…") { importing = true }
                 .buttonStyle(.bordered)
@@ -225,8 +301,24 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Documents after the person filter + free-text search (matches name/type/date/person).
+    private var filteredDocs: [MedDocument] {
+        let names = Dictionary(uniqueKeysWithValues: app.people.map { ($0.slug, $0.displayName) })
+        var docs = app.documents
+        if let pf = personFilter { docs = docs.filter { $0.personId == pf } }
+        let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        if !q.isEmpty {
+            docs = docs.filter { d in
+                [d.displayName, d.docType.replacingOccurrences(of: "_", with: " "),
+                 d.testDate ?? "", d.year, names[d.personId] ?? d.personId]
+                    .joined(separator: " ").lowercased().contains(q)
+            }
+        }
+        return docs
+    }
+
     private var groups: [(String, [MedDocument])] {
-        let docs = app.documents
+        let docs = filteredDocs
         let dict: [String: [MedDocument]]
         switch groupBy {
         case .person:
@@ -255,8 +347,8 @@ private struct ProcessingRow: View {
                 Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 16)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(pf.fileName).font(.caption).lineLimit(1)
-                Text(pf.label).font(.caption2).foregroundStyle(pf.status == .error ? Theme.warn : .secondary)
+                Text(pf.fileName).zfont(.caption).lineLimit(1)
+                Text(pf.label).zfont(.caption2).foregroundStyle(pf.status == .error ? Theme.warn : .secondary)
             }
             Spacer()
             if pf.status == .error {
@@ -286,10 +378,10 @@ private struct DocRow: View {
                 .foregroundStyle(doc.isImaging ? Theme.warn : Theme.accent)
             VStack(alignment: .leading, spacing: 1) {
                 Text(doc.displayName)
-                    .font(.callout).lineLimit(1)
+                    .zfont(.callout).lineLimit(1)
                 HStack(spacing: 6) {
-                    if let d = doc.testDate { Text(d).font(.caption2).foregroundStyle(.secondary) }
-                    if let lab = doc.sourceLab { Text(lab).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+                    if let d = doc.testDate { Text(d).zfont(.caption2).foregroundStyle(.secondary) }
+                    if let lab = doc.sourceLab { Text(lab).zfont(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                 }
             }
             Spacer()

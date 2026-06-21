@@ -29,6 +29,15 @@ struct roundsApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
             }
+            CommandGroup(after: .toolbar) {
+                Button("Larger Text") { app.bumpFontScale(1) }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Smaller Text") { app.bumpFontScale(-1) }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Actual Size") { app.fontScaleStep = 0 }
+                    .keyboardShortcut("0", modifiers: .command)
+                Divider()
+            }
             CommandMenu("View") {
                 Button("Next Tab") { app.cycleTab(forward: true) }
                     .keyboardShortcut(.tab, modifiers: .control)

@@ -25,6 +25,9 @@ final class ChatRuntime: Identifiable {
     var isStreaming = false
     var sessionId: String?
     var generatedTitle: String?
+    var liveTokens = 0          // output tokens this turn (live counter shown in the trace)
+    private var tokenBase = 0   // tokens from completed messages this turn
+    private var lastMsgTokens = 0
 
     private var warm: WarmSession?
     private var warmModel: RoundsModel?
@@ -58,6 +61,7 @@ final class ChatRuntime: Identifiable {
             run.includePartial = false
             run.appendSystemPrompt = nil
             run.mcpConfigPath = nil
+            run.effort = .default   // titling needs no extra reasoning
             var result = ""
             for await e in ClaudeEngine.stream(run) { if case .finished(let t, _, _, _) = e { result = t } }
             let clean = result.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -214,10 +218,17 @@ final class ChatRuntime: Identifiable {
         var sid: String?
         var completed = false
         var hadError = false
+        liveTokens = 0; tokenBase = 0; lastMsgTokens = 0
         for await event in stream {
             switch event {
             case .started(let s, _):
                 sid = s
+            case .usage(let t):
+                // output_tokens is cumulative PER message and resets each new message — roll the
+                // previous message's total into the base so the displayed counter only grows.
+                if t < lastMsgTokens { tokenBase += lastMsgTokens }
+                lastMsgTokens = t
+                liveTokens = tokenBase + t
             case .textDelta(let t):
                 fullText += t
                 liveText = ProtocolParser.stripForDisplay(fullText)
@@ -233,10 +244,14 @@ final class ChatRuntime: Identifiable {
                 if !t.isEmpty { fullText = merge(fullText, t) }
                 if !s.isEmpty { sid = s }
                 completed = true
-                if e { hadError = true }
+                if e {
+                    hadError = true
+                    if let notice = AppState.billingMessage(t) ?? AppState.billingMessage(fullText) { app.engineNotice = notice }
+                }
             case .failed(let m):
                 hadError = true
                 statusLine = "Error: \(m)"
+                if let notice = AppState.billingMessage(m) { app.engineNotice = notice }
             }
         }
         return (ProtocolParser.parse(fullText), sid, completed && !hadError)

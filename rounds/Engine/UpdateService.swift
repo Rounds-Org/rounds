@@ -22,8 +22,8 @@ nonisolated struct UpdateInfo: Sendable, Equatable {
 
 nonisolated enum UpdateService {
 
-    /// Where the static manifest lives. Replace with the real Releases URL at ship time.
-    static let manifestURL = URL(string: "https://raw.githubusercontent.com/rounds-app/rounds/main/appcast.json")!
+    /// Where the static manifest lives (committed to the repo; served raw from GitHub).
+    static let manifestURL = URL(string: "https://raw.githubusercontent.com/Rounds-Org/rounds/main/appcast.json")!
 
     static func check(currentVersion: String) async -> UpdateInfo? {
         // A local override lets us test the banner without a live endpoint.

@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "lastReviewed": "2026-06-21",
+  "reviewer": "TODO: assign a named clinical reviewer before relying on this in production.",
+  "sourceNote": "Curated consumer red-flag symptom clusters for DETERMINISTIC triage that runs in Swift BEFORE the model reasons. This is a conservative safety net, NOT a diagnostic tool and NOT exhaustive — a non-match never means 'safe'. Patterns are case-insensitive regex over the user's free text; a rule fires when every 'all' pattern matches AND (no 'anyOf' OR at least one 'anyOf' matches). Bias toward firing on the canonical emergencies; tune 'anyOf' to avoid alert-fatigue. Resources are bundled offline so a match never requires a network call.",
+  "rules": [
+    {
+      "id": "cardiac",
+      "label": "Chest pain that may be a heart emergency",
+      "kind": "emergency",
+      "message": "Chest pain or pressure like this can be a heart emergency. Call your local emergency number now — don't wait, and don't drive yourself.",
+      "all": ["chest (pain|pressure|tight|tightness|heavy|heaviness|discomfort|squeez)"],
+      "anyOf": ["jaw", "left arm|arm pain|shoulder", "short(ness)? of breath|can'?t breathe|hard to breathe", "sweat|clammy", "nausea|vomit", "radiat", "crushing"]
+    },
+    {
+      "id": "stroke",
+      "label": "Signs that may be a stroke (FAST)",
+      "kind": "emergency",
+      "message": "These can be signs of a stroke, where minutes matter. Call your local emergency number now.",
+      "all": [],
+      "anyOf": [
+        "face.{0,15}(droop|drooping|numb|numbness)|one side of (my|the|your) ?face",
+        "slurred speech|speech.{0,12}(slurred|slurring)|can'?t speak|trouble speaking|words.{0,14}(slurred|wrong|jumbled|coming out wrong)",
+        "sudden(ly)? (weakness|numbness).{0,20}(one side|left side|right side|arm|leg|face)",
+        "(arm|leg|face).{0,14}(went|feels?|going|gone) (weak|numb|dead)",
+        "sudden(ly)? (vision loss|loss of vision|can'?t see|blurred vision)"
+      ]
+    },
+    {
+      "id": "anaphylaxis",
+      "label": "Possible severe allergic reaction",
+      "kind": "emergency",
+      "message": "Trouble breathing or throat/lip swelling can be a life-threatening allergic reaction. Use an epinephrine auto-injector if you have one and call your local emergency number now.",
+      "all": [],
+      "anyOf": [
+        "throat (closing|swelling|tight|swollen)|can'?t swallow",
+        "(lips|tongue|face) (swelling|swollen)",
+        "(trouble breathing|can'?t breathe|wheez|tight chest).{0,40}(hives|allergic|allerg|sting|bee|wasp|nut|peanut|shellfish|swell|epi[- ]?pen)",
+        "hives.{0,40}(throat|breath|swell|face|lips|dizzy)",
+        "anaphyla"
+      ]
+    },
+    {
+      "id": "self-harm",
+      "label": "Thoughts of suicide or self-harm",
+      "kind": "crisis",
+      "message": "It sounds like you're going through something painful, and you deserve support right now. Please reach out to a crisis line — in the US call or text 988; in the UK call 111 or Samaritans on 116 123; or call your local emergency number. You don't have to face this alone.",
+      "all": [],
+      "anyOf": [
+        "kill(ing)? myself|end(ing)? (my )?life|end it all|take my (own )?life|want to die|don'?t want to (live|be alive|wake up|exist)|better off dead|thoughts of (ending|dying|death|suicide|killing)|no reason to live",
+        "suicid",
+        "hurt(ing)? myself|harm(ing)? myself|self[- ]harm|cut(ting)? myself"
+      ]
+    },
+    {
+      "id": "severe-bleeding",
+      "label": "Severe or unusual bleeding",
+      "kind": "emergency",
+      "message": "This kind of bleeding can be serious. Call your local emergency number or go to the nearest emergency department now.",
+      "all": [],
+      "anyOf": [
+        "bleeding (that )?(won'?t|wont) stop|can'?t stop the bleeding|uncontrolled bleeding",
+        "coughing up blood|vomiting blood|throwing up blood|blood in (my )?vomit",
+        "black,? tarry (stool|poop)|tarry stool|(passing|pooping) blood",
+        "bleeding heavily|soaking (a|through) (pad|tampon).{0,20}(an hour|hour)"
+      ]
+    },
+    {
+      "id": "thunderclap-headache",
+      "label": "Sudden, severe headache",
+      "kind": "emergency",
+      "message": "A sudden, severe headache that peaks within seconds to minutes can be a medical emergency. Call your local emergency number now.",
+      "all": ["headache|head pain"],
+      "anyOf": ["worst (headache|of my life)|thunderclap|sudden(ly|est)?.{0,20}(severe|worst|intense)|came on (suddenly|in seconds)|exploded"]
+    },
+    {
+      "id": "breathing",
+      "label": "Severe trouble breathing",
+      "kind": "emergency",
+      "message": "Severe trouble breathing needs urgent help. Call your local emergency number now.",
+      "all": [],
+      "anyOf": [
+        "can'?t breathe|cannot breathe|gasping for air|struggling to breathe|fighting for (air|breath)",
+        "turning blue|lips (are )?blue|bluish"
+      ]
+    },
+    {
+      "id": "neuro-sepsis",
+      "label": "High fever with confusion or a stiff neck",
+      "kind": "emergency",
+      "message": "A high fever with confusion, a stiff neck, or a new spreading rash can be a serious infection like meningitis or sepsis. Seek emergency care now.",
+      "all": ["fever|high temperature"],
+      "anyOf": ["stiff neck|can'?t (touch|move) (my )?chin|neck stiffness", "confus|disorient|not making sense", "rash (that )?(spread|won'?t fade|doesn'?t fade)|non[- ]blanching"]
+    },
+    {
+      "id": "pregnancy",
+      "label": "Pregnancy warning signs",
+      "kind": "emergency",
+      "message": "During pregnancy, heavy bleeding, severe belly pain, or a bad headache with vision changes need urgent assessment. Contact your maternity unit or local emergency number now.",
+      "all": ["pregnan|expecting|weeks pregnant"],
+      "anyOf": ["heavy bleeding|gushing|severe (cramp|pain)|vision (changes|blurry).{0,20}headache|no (fetal )?movement|baby (not|hasn'?t) (moving|moved)"]
+    }
+  ]
+}

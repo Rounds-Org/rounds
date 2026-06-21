@@ -98,7 +98,17 @@ struct SettingsView: View {
                     section("Safety contract") {
                         Text("The system prompt Rounds always enforces. It's read-only — your custom instructions are added on top.")
                             .font(.caption).foregroundStyle(.secondary)
-                        DisclosureGroup("View the safety contract", isExpanded: $showContract) {
+                        Button { withAnimation { showContract.toggle() } } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: showContract ? "chevron.down" : "chevron.right").font(.caption2)
+                                Text(showContract ? "Hide the safety contract" : "View the safety contract")
+                                Spacer()
+                            }
+                            .font(.callout).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointerStyle(.link)
+                        if showContract {
                             ScrollView {
                                 Text(app.contractText).font(.system(.caption, design: .monospaced))
                                     .textSelection(.enabled)
@@ -108,7 +118,6 @@ struct SettingsView: View {
                             .padding(8)
                             .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
                         }
-                        .font(.callout)
                     }
 
                     section("Reset") {

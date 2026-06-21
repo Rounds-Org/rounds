@@ -75,6 +75,7 @@ final class ChatRuntime: Identifiable {
     func send(_ text: String, references: [Reference]) {
         let msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !msg.isEmpty else { return }
+        app.checkRedFlags(msg)   // deterministic Principle-6 net, before the model
         guard !isStreaming else { app.toast = "This chat is still answering — use Stop to interrupt."; return }
         task = Task { await runTurn(msg, references) }
     }
@@ -95,7 +96,7 @@ final class ChatRuntime: Identifiable {
     }
 
     private func runTurn(_ msg: String, _ references: [Reference]) async {
-        messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date()))
+        messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date(), references: references))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)   // shows in Recent immediately
         isStreaming = true
         statusLine = "Thinking…"; liveText = ""; trace = []
@@ -132,6 +133,14 @@ final class ChatRuntime: Identifiable {
             ? "This answer was marked clinical but came without sources. Treat it with caution and confirm with a clinician."
             : nil
         liveText = ""
+        // The chat surfaced a NEW or revised next step — the app persists it (chat is read-only) so
+        // it shows on the dashboard, and we attach it to this message so it renders inline as a card.
+        if !parsed.hypotheses.isEmpty {
+            let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId)
+            if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
+                messages[idx].hypotheses = saved
+            }
+        }
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
         generateTitleIfNeeded()
         // The brain asked to fix/translate/restatus a next-step card — apply it in the
@@ -140,6 +149,34 @@ final class ChatRuntime: Identifiable {
             let actions = parsed.stepActions
             Task { await app.applyStepActions(actions) }
         }
+    }
+
+    // MARK: next-steps generation (runs THROUGH this chat so it's a live, openable session)
+
+    /// Drive a next-steps GENERATION run through this chat: seed the request immediately (so the
+    /// chat appears and, if opened, shows live work — the trace + streaming text — instead of an
+    /// empty/stale view), stream it, then finalize. The model writes the hypothesis files itself;
+    /// we return the parsed turn so the caller can raise any alert. Appends to the transcript so a
+    /// prior conversation isn't wiped.
+    @discardableResult
+    func runGeneration(_ run: ClaudeRun, userText: String, title: String, initialStatus: String) async -> ParsedTurn {
+        messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: userText, timestamp: Date()))
+        generatedTitle = title
+        app.persistChat(id, messages, sources, sessionId, title: title)   // visible in Recent at once
+        isStreaming = true
+        statusLine = initialStatus; liveText = ""; trace = []
+        defer { isStreaming = false; statusLine = ""; liveText = "" }
+
+        let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
+        if let sid, !sid.isEmpty { sessionId = sid }
+        let answer = parsed.displayText.isEmpty ? liveText : parsed.displayText
+        let finalText = answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Updated your next steps — they're on your dashboard." : answer
+        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date()))
+        if !parsed.sources.isEmpty { sources = parsed.sources }
+        liveText = ""
+        app.persistChat(id, messages, sources, sessionId, title: title)
+        return parsed
     }
 
     // MARK: one-shot (used by intake into this chat's view)
@@ -152,6 +189,15 @@ final class ChatRuntime: Identifiable {
         let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
         if let sid, !sid.isEmpty { sessionId = sid }
         return parsed
+    }
+
+    /// Re-read this chat from disk. Used when a background pass rewrote the transcript while the
+    /// chat was open — e.g. a next-steps regeneration refreshed the per-person "Next steps" chat.
+    func reloadFromDisk() {
+        guard !isStreaming else { return }
+        messages = app.loadTranscript(id)
+        sources = VaultStore.loadChatSources(id, app.vault)
+        sessionId = app.chats.first { $0.id == id }?.sessionId
     }
 
     func append(_ role: ChatRole, _ text: String) {

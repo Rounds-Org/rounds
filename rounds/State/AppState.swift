@@ -41,6 +41,7 @@ final class AppState {
     var documents: [MedDocument] = []
     var hypotheses: [Hypothesis] = []
     var chats: [ChatSummary] = []
+    var complaints: [Complaint] = []
     var displayName: String = ""
 
     // Model
@@ -234,6 +235,7 @@ final class AppState {
         documents = snap.documents
         hypotheses = snap.hypotheses
         chats = snap.chats
+        complaints = snap.complaints
         displayName = snap.displayName
     }
 
@@ -272,6 +274,16 @@ final class AppState {
     }
 
     func showToast(_ s: String) { toast = s }
+
+    /// DETERMINISTIC Principle-6 net (Phase 0). Scans free text for curated red-flag patterns
+    /// BEFORE the model reasons and, on a match, raises the urgent banner regardless of model
+    /// output. A non-match is NOT reassurance — the brain still says it rules nothing out.
+    @discardableResult
+    func checkRedFlags(_ text: String) -> Bool {
+        guard let m = RedFlagDetector.detect(text) else { return false }
+        urgentBanner = m.asAlert
+        return true
+    }
     func beginHypotheses() {
         Task { await generateHypotheses() }   // background lane; self-guards re-entry
     }
@@ -366,6 +378,34 @@ final class AppState {
         selectTab(.chat(summary.id))
     }
 
+    /// The person next-steps generation targets first (most documents; `_self` fallback).
+    var primaryPersonSlug: String {
+        let counts = Dictionary(grouping: documents, by: { $0.personId }).mapValues { $0.count }
+        return counts.keys.sorted { counts[$0]! > counts[$1]! }.first ?? "_self"
+    }
+
+    /// Open the next-steps GENERATION chat (the live Claude Code session) for the primary person —
+    /// Rounds is a client over Claude Code, so the user can watch/continue that session like any chat.
+    func openNextStepsChat() { selectTab(.chat("nextsteps-\(primaryPersonSlug)")) }
+
+    /// A chat surfaced a NEW or revised next step. The chat is read-only, so the APP persists the
+    /// parsed hypotheses to files (so they appear on the dashboard), then reloads. Returns the saved
+    /// steps so the chat can show them inline.
+    @discardableResult
+    func persistChatHypotheses(_ hyps: [Hypothesis], sessionId: String?) -> [Hypothesis] {
+        guard !hyps.isEmpty else { return [] }
+        var saved: [Hypothesis] = []
+        for var h in hyps {
+            if h.personId.isEmpty { h.personId = "_self" }
+            if h.status.isEmpty { h.status = "proposed" }
+            if h.sessionId == nil { h.sessionId = sessionId }
+            VaultStore.saveHypothesis(h, vault)
+            saved.append(h)
+        }
+        reload()
+        return saved
+    }
+
     func deleteChat(_ id: String) {
         chatRuntimes[id]?.stop()
         chatRuntimes[id] = nil
@@ -411,8 +451,9 @@ final class AppState {
 
     func chatAbout(_ hyp: Hypothesis) {
         startNewChat()
+        // Attach the step as a reference chip and leave the input empty — the user just types.
         pendingReferences = [Reference(kind: .step, id: hyp.id, label: hyp.title)]
-        pendingChatDraft = "@\(hyp.title) "
+        pendingChatDraft = ""
     }
 
     func explainInNewChat(_ quote: String, fromChat: String?) {
@@ -761,10 +802,14 @@ final class AppState {
         all under one slug. Do NOT move the raw binaries yourself; the app does that from your \
         sidecars. Do NOT edit index.json. Do NOT draw any clinical conclusion.
 
-        Image guard (Principle 1): set `conclusionsBlocked=true` ONLY for a file that is a raw \
-        scan/photo with NO written report — and for those, also create an empty `report.txt` \
-        next to where the raw file will live. A typed report (even from an ultrasound or X-ray) \
-        has a text report, so `conclusionsBlocked=false`.
+        Image guard (Principle 1) — a photo of TEXT is not a pixel conclusion: if a file is a \
+        photographed/scanned printed DOCUMENT (a lab report, a typed consult/discharge note) and \
+        the app's OCR text was sparse, USE the Read tool on that document's staged image to \
+        transcribe its printed markers (names, values, units, reference ranges) into the sidecar — \
+        that is OCR, and `conclusionsBlocked=false`. Set `conclusionsBlocked=true` ONLY for a \
+        DIAGNOSTIC image with no written report (scan/X-ray/CT/MRI/ultrasound/ECG tracing/pathology, \
+        or a body/skin photo) — for those create an empty `report.txt` next to the raw file and do \
+        NOT read findings from the pixels.
 
         \(lines.joined(separator: "\n"))
 
@@ -809,20 +854,16 @@ final class AppState {
                 .replacingOccurrences(of: "{{TRIGGER}}", with: trigger)
                 .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
             let run = baseRun(prompt: prompt, policy: .readWrite, resume: nil)
-            var full = ""
-            for await event in ClaudeEngine.stream(run) {
-                switch event {
-                case .toolUse(let n, let input):
-                    let label = Self.traceLabel(n, input)
-                    if nextStepsTrace.last != label { nextStepsTrace.append(label) }
-                case .textDelta(let t): full += t
-                case .finished(let t, _, _, _): if !t.isEmpty { full = t }
-                default: break
-                }
-            }
-            // Principle 6: this background lane never surfaced rounds.alert before (the stream
-            // wasn't parsed), so a red flag could be dropped. Parse it and raise the urgent banner.
-            if let a = ProtocolParser.parse(full).alert { urgentBanner = a }
+            // Run the generation THROUGH the per-person "Next steps" chat so it's a live, openable
+            // session: the request appears immediately and the trace + text stream into it as it
+            // works (no more empty/stale chat). The model writes the hypothesis files itself (readWrite).
+            let rt = runtime("nextsteps-\(slug)")
+            let parsed = await rt.runGeneration(run,
+                userText: "Review my records and update my next steps.",
+                title: "Next steps · \(name)",
+                initialStatus: "Reviewing your records…")
+            // Principle 6: a red flag from this background lane must still raise the urgent banner.
+            if let a = parsed.alert { urgentBanner = a }
             reload()   // surface new steps as each person finishes
         }
         // Remember the language we generated in, so a later launch can detect a mismatch.
@@ -874,6 +915,7 @@ final class AppState {
     func answerQuestionStep(_ hyp: Hypothesis, answer: String) async {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        checkRedFlags(trimmed)   // a red-flag answer escalates immediately, before regeneration
         answeringStep = hyp.id
         defer { answeringStep = nil }
         let slug = hyp.personId
@@ -906,7 +948,92 @@ final class AppState {
         reload()
 
         // Pass B — regenerate so the recorded answer produces a sharper next step (never re-asks it).
-        await generateHypotheses(trigger: "the user just answered a history question — use it as confirmed primary history to form a sharper next step, and never re-ask it")
+        // A complaint-linked question feeds its OWN encounter generation; otherwise the doc lane.
+        if let cid = hyp.complaintId, let c = complaints.first(where: { $0.id == cid }) {
+            await generateForComplaint(c, trigger: "the user just answered a history question — use it and either ask the next high-yield question or propose a concrete next step; never re-ask it")
+        } else {
+            await generateHypotheses(trigger: "the user just answered a history question — use it as confirmed primary history to form a sharper next step, and never re-ask it")
+        }
+    }
+
+    // MARK: - Complaints (symptom-first encounters)
+
+    /// A conservative heuristic: does this free text read like a symptom (-> open a Complaint) vs a
+    /// question/navigation (-> chat)? Requires a symptom word, so "what is ferritin?" stays a chat.
+    func looksLikeSymptom(_ text: String) -> Bool {
+        let pattern = "pain|ache|aching|hurt|sore|dizz|nause|fatigue|exhaust|rash|swollen|swelling|cramp|headache|migraine|fever|cough|short of breath|breathless|numb|tingl|stiff|bleed|vomit|diarrh|constipat|insomnia|can'?t sleep|burning|itch|palpitation|throbbing|spasm|weakness|bloat|reflux|heartburn|discharge|\\blump\\b"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+        let ns = text as NSString
+        return re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) != nil
+    }
+
+    /// Open a symptom-first encounter: red-flag check, persist a Complaint, then run the interview.
+    func beginComplaint(_ text: String, personSlug: String = "_self") {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        checkRedFlags(t)
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"; df.locale = Locale(identifier: "en_US_POSIX")
+        let c = Complaint(id: "cmp_\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString.prefix(4))",
+                          personId: personSlug, title: String(t.prefix(70)), summary: t,
+                          status: "open", openedAt: df.string(from: Date()))
+        persistComplaint(c)
+        complaints.insert(c, at: 0)
+        selectHome()
+        toast = "Tracking this as a concern — I'll ask a couple of questions."
+        Task { await generateForComplaint(c) }
+    }
+
+    private func persistComplaint(_ c: Complaint) {
+        let dir = vault.complaintsDir(c.personId).appendingPathComponent(c.id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let obj: [String: Any] = ["schemaVersion": 1, "id": c.id, "personId": c.personId,
+                                  "title": c.title, "summary": c.summary, "status": c.status, "openedAt": c.openedAt]
+        if let d = try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted) {
+            try? d.write(to: dir.appendingPathComponent("complaint.json"))
+        }
+        let md = "# \(c.title)\n\nstatus: \(c.status)\nopened: \(c.openedAt)\n\nWhat the user said:\n\(c.summary)\n"
+        try? md.data(using: .utf8)?.write(to: dir.appendingPathComponent("complaint.md"))
+    }
+
+    /// Run the symptom-first interview/next-steps pass for a complaint (background next-steps lane).
+    func generateForComplaint(_ complaint: Complaint, trigger: String = "the user described a new symptom") async {
+        identifyingNextSteps = true
+        nextStepsStatus = "Thinking about “\(complaint.title)”…"
+        nextStepsTrace = []
+        defer { identifyingNextSteps = false; nextStepsStatus = ""; nextStepsTrace = [] }
+
+        let slug = complaint.personId
+        let prompt = BrainResources.complaintPrompt
+            .replacingOccurrences(of: "{{PERSON_SLUG}}", with: slug)
+            .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
+            .replacingOccurrences(of: "{{COMPLAINT_ID}}", with: complaint.id)
+            .replacingOccurrences(of: "{{TRIGGER}}", with: trigger)
+        + "\n\n--- THE COMPLAINT ---\nTitle: \(complaint.title)\nWhat the user said: \(complaint.summary)\nOpened: \(complaint.openedAt)\nConfirmed history gathered so far is in people/\(slug)/CLAUDE.md. Existing steps for this complaint are under people/\(slug)/hypotheses/ with complaintId \(complaint.id)."
+
+        let run = baseRun(prompt: prompt, policy: .readWrite, resume: nil)
+        var full = ""
+        for await event in ClaudeEngine.stream(run) {
+            switch event {
+            case .toolUse(let n, let input):
+                let label = Self.traceLabel(n, input)
+                if nextStepsTrace.last != label { nextStepsTrace.append(label) }
+            case .textDelta(let t): full += t
+            case .finished(let t, _, _, _): if !t.isEmpty { full = t }
+            default: break
+            }
+        }
+        if let a = ProtocolParser.parse(full).alert { urgentBanner = a }   // defense in depth
+        reload()
+    }
+
+    func resolveComplaint(_ c: Complaint) {
+        var u = c; u.status = "resolved"; persistComplaint(u)
+        if let i = complaints.firstIndex(where: { $0.id == c.id }) { complaints[i] = u }
+    }
+
+    func deleteComplaint(_ c: Complaint) {
+        try? FileManager.default.removeItem(at: vault.complaintsDir(c.personId).appendingPathComponent(c.id, isDirectory: true))
+        complaints.removeAll { $0.id == c.id }
     }
 
     // MARK: - Files & center tabs
@@ -1000,7 +1127,7 @@ final class AppState {
         try? fm.removeItem(at: claudeProjectDir)
 
         // 3. Reset in-memory state to defaults.
-        people = []; documents = []; hypotheses = []; chats = []; displayName = ""
+        people = []; documents = []; hypotheses = []; chats = []; complaints = []; displayName = ""
         openTabs = [.home]; activeTab = .home; openFileDocs = [:]
         pendingChatDraft = ""; pendingReferences = []
         toast = nil; showSettings = false

@@ -1,0 +1,22 @@
+{
+  "note": "Deterministic golden-set for the Swift RedFlagDetector (Principle 6, Phase 0). These test the CODE path (no model in the loop): each `text` is fed to RedFlagDetector.detect() and must yield the expected rule id (or null for benign). Mirrors rounds/Engine/RedFlagDetector.swift + brain/red-flag-symptoms.json. A regression here is RELEASE-BLOCKING: under-firing on a canonical emergency must fail the build; the benign cases guard against alert-fatigue. TODO: a CI runner that loads the bundled JSON and asserts these without spawning the model.",
+  "mustFire": [
+    { "text": "chest pressure spreading to my jaw and left arm, sweaty, 40 minutes", "expect": "cardiac" },
+    { "text": "my face is drooping and my speech is slurred all of a sudden", "expect": "stroke" },
+    { "text": "my throat is closing and I can't breathe after a bee sting", "expect": "anaphylaxis" },
+    { "text": "I've been having thoughts of ending my life", "expect": "self-harm" },
+    { "text": "I want to die", "expect": "self-harm" },
+    { "text": "I keep coughing up blood", "expect": "severe-bleeding" },
+    { "text": "worst headache of my life, came on in seconds", "expect": "thunderclap-headache" },
+    { "text": "I can't breathe and I'm gasping for air", "expect": "breathing" },
+    { "text": "high fever and a stiff neck with confusion", "expect": "neuro-sepsis" },
+    { "text": "I'm 30 weeks pregnant with heavy bleeding and severe pain", "expect": "pregnancy" }
+  ],
+  "mustNotFire": [
+    "I've had a dull ache on the inside of my elbow for 3 weeks",
+    "what does my low ferritin mean?",
+    "mild headache after a long day",
+    "my knee hurts a bit when I run",
+    "I feel a bit tired and bloated lately"
+  ]
+}

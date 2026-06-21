@@ -27,7 +27,7 @@ struct ChatView: View {
     }
 
     private func pickupPending() {
-        if !app.pendingChatDraft.isEmpty {
+        if !app.pendingChatDraft.isEmpty || !app.pendingReferences.isEmpty {
             draft = app.pendingChatDraft
             references = app.pendingReferences
             app.pendingChatDraft = ""
@@ -56,6 +56,8 @@ struct ChatView: View {
             MentionField(text: $draft, references: $references,
                          placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
                          onSend: send, autofocus: true)
+            Text("Research tool grounded in sources — not medical advice, and it can be wrong.")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(12)
         .background(Theme.panel)
@@ -132,10 +134,24 @@ struct MessageRow: View {
             HStack(alignment: .bottom, spacing: 4) {
                 Spacer(minLength: 60)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(message.text)
-                        .textSelection(.enabled)
-                        .padding(.vertical, 8).padding(.horizontal, 12)
-                        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                    if !message.references.isEmpty {
+                        HStack(spacing: 5) {
+                            ForEach(message.references) { ref in
+                                HStack(spacing: 4) {
+                                    Image(systemName: ref.iconName).font(.system(size: 9))
+                                    Text(ref.label).font(.caption2).lineLimit(1)
+                                }
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
+                            }
+                        }
+                    }
+                    if !message.text.isEmpty {
+                        Text(message.text)
+                            .textSelection(.enabled)
+                            .padding(.vertical, 8).padding(.horizontal, 12)
+                            .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+                    }
                     CopyButton(text: message.text)
                 }
             }
@@ -145,8 +161,18 @@ struct MessageRow: View {
                 Text(message.text).font(.callout).foregroundStyle(.secondary).italic()
             }
         case .assistant:
-            VStack(alignment: .leading, spacing: 4) {
-                MarkdownText(message.text)
+            VStack(alignment: .leading, spacing: 8) {
+                // Table-free messages render as ONE selectable Text so the user can drag-select
+                // across paragraphs and copy. Table messages keep the grid renderer (per-block).
+                Group {
+                    if MarkdownText.hasTable(message.text) {
+                        MarkdownText(message.text)
+                    } else {
+                        Text(MarkdownText.fullAttributed(message.text))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                     .contextMenu {
                         Button("Explain in a new chat") {
                             app.explainInNewChat(message.text, fromChat: app.activeChatId)
@@ -156,10 +182,57 @@ struct MessageRow: View {
                             NSPasteboard.general.setString(message.text, forType: .string)
                         }
                     }
+                if !message.hypotheses.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label(message.hypotheses.count == 1 ? "Added to your next steps" : "Added \(message.hypotheses.count) next steps",
+                              systemImage: "checklist")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        ForEach(message.hypotheses) { InlineStepCard(hyp: $0) }
+                    }
+                    .padding(.top, 2)
+                }
                 CopyButton(text: message.text)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// A compact next-step card shown INLINE in chat when a conversation creates a step.
+/// Clicking it jumps Home, where the full card lives in "Next steps".
+struct InlineStepCard: View {
+    @Environment(AppState.self) private var app
+    let hyp: Hypothesis
+    @State private var hovering = false
+
+    var body: some View {
+        Button { app.selectHome() } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: hyp.isQuestion ? "bubble.left.and.text.bubble.right" : "checklist")
+                    .foregroundStyle(Theme.accent).font(.callout)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(hyp.title).font(.subheadline.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                    if !hyp.whyNow.isEmpty {
+                        Text(hyp.whyNow).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                    }
+                    HStack(spacing: 6) {
+                        Pill(text: hyp.kind.replacingOccurrences(of: "-", with: " "))
+                        if let t = hyp.topTier { TierBadge(tier: t) }
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .background(Theme.accentSoft.opacity(hovering ? 0.8 : 0.5), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.30)))
+        .onHover { hovering = $0 }
     }
 }
 
@@ -354,6 +427,46 @@ struct MarkdownText: View {
         }
         flush()
         return blocks
+    }
+
+    /// Does the text contain a GitHub-style table? Such messages keep the grid renderer; everything
+    /// else renders as a single selectable Text (so selection spans paragraphs).
+    static func hasTable(_ raw: String) -> Bool {
+        let lines = raw.components(separatedBy: "\n")
+        for i in 0..<lines.count where lines[i].contains("|") {
+            if i + 1 < lines.count, isTableSeparator(lines[i + 1]) { return true }
+        }
+        return false
+    }
+
+    /// The whole message as ONE AttributedString (paragraphs, headings, bullets, numbered lists,
+    /// inline bold/italic, renumbered [S#]) — so a single SwiftUI Text can be drag-selected end-to-end.
+    static func fullAttributed(_ raw: String) -> AttributedString {
+        var out = AttributedString("")
+        for (i, block) in parse(raw).enumerated() {
+            if i > 0 { out += AttributedString("\n\n") }
+            switch block {
+            case .heading(let t):
+                var a = inline(t); a.font = .headline
+                out += a
+            case .paragraph(let t):
+                out += inline(t)
+            case .bullets(let items):
+                for (j, it) in items.enumerated() {
+                    if j > 0 { out += AttributedString("\n") }
+                    out += AttributedString("•  ") + inline(it)
+                }
+            case .ordered(let items):
+                for (j, it) in items.enumerated() {
+                    if j > 0 { out += AttributedString("\n") }
+                    out += AttributedString("\(j + 1).  ") + inline(it)
+                }
+            case .table(let header, let rows):
+                let lines = ([header] + rows).map { $0.joined(separator: "   |   ") }
+                out += AttributedString(lines.joined(separator: "\n"))
+            }
+        }
+        return out
     }
 
     private static func isTableSeparator(_ line: String) -> Bool {

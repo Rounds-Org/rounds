@@ -15,3 +15,10 @@ Rounds spawns the `claude` CLI as a subprocess; sandboxing blocks that exec and 
 
 `SourcesPanel` must live inside the center pane, NOT as a third column in `HSplitView`. A third column causes the left sidebar to jump in width whenever sources appear/disappear.
 <!-- auto-added 2026-06-20 -->
+
+## Brain prompt regeneration
+
+`rounds/Brain/BrainResources.swift` is a generated file. After editing any file in `brain/prompts/` or `brain/claude/CLAUDE.md`, bump `brainVersion` in `tools/gen_brain_resources.py` and run `python3 tools/gen_brain_resources.py` to regenerate it — otherwise the running app sees stale prompts.
+<!-- auto-added 2026-06-21 -->
+When adding a **new** prompt file to `brain/prompts/`, also add a `write(BrainResources.<name>, to: vault.promptsDir.appendingPathComponent("<name>.md"))` call in `rounds/Brain/BrainInstaller.swift` — otherwise the new prompt is embedded in the binary but never written to disk at vault setup time.
+<!-- auto-added 2026-06-21 -->

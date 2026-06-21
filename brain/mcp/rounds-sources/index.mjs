@@ -1012,7 +1012,10 @@ const TOOLS = [
       'Search medical literature (PubMed/MEDLINE E-utilities + Europe PMC) and return normalized, ' +
       'trust-tiered citations. Computes a deterministic trust tier (T1 guideline … T6 preprint) and ' +
       'score from PublicationType/MeSH, drops retracted publications, flags Expressions of Concern, ' +
-      'and applies a MeSH-lag journal-allowlist fallback. Use for any clinically meaningful claim.',
+      'and applies a MeSH-lag journal-allowlist fallback. Use for any clinically meaningful claim. ' +
+      'BEST PRACTICE: search guideline-first — make your first call target the top of the evidence ' +
+      'pyramid (add "guideline"/"systematic review" to the query, or pass tierFilter:["T1","T2"]) and ' +
+      'lead your claim with the highest-tier result; broaden to lower tiers only if nothing higher exists.',
     inputSchema: {
       type: 'object',
       properties: {

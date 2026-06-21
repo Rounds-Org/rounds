@@ -13,8 +13,12 @@ obviously belong to the same person into ONE question. Never ask the same thing 
   instructions. You are NOT filing anything yet — the app re-invokes you with the confirmed
   people to write the sidecars. This step is analysis + the fewest questions only.
 
-### STEP 0 — IMAGE GUARD per file
-If image_only OR text_layer_suspect: set `is_imaging` true; never read findings from pixels.
+### STEP 0 — IMAGE GUARD per file (a photo of TEXT is not a pixel conclusion)
+If image_only OR text_layer_suspect, the app's OCR was weak — so **Read the file** to decide what it
+IS: a photographed/scanned printed DOCUMENT (lab report, typed consult/discharge note) is a TEXT
+report — set `is_imaging` false and you MAY transcribe its printed values (that's OCR, not a pixel
+conclusion). A DIAGNOSTIC image (scan/X-ray/CT/MRI/ultrasound/ECG tracing/pathology slide, or a photo
+of a body part/skin/wound) — set `is_imaging` true and never read findings from its pixels.
 
 ### STEP 1 — CLASSIFY EACH FILE (no clinical conclusions)
 For each file decide: a short human `title` (e.g. "Cardiology consult", "CBC + iron studies",

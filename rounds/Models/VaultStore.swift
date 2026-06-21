@@ -14,6 +14,7 @@ nonisolated struct VaultSnapshot: Sendable {
     var documents: [MedDocument] = []
     var hypotheses: [Hypothesis] = []
     var chats: [ChatSummary] = []
+    var complaints: [Complaint] = []
     var displayName: String = ""
 }
 
@@ -26,7 +27,32 @@ nonisolated enum VaultStore {
         snap.documents = loadDocuments(vault, people: snap.people)
         snap.hypotheses = loadHypotheses(vault)
         snap.chats = loadChats(vault)
+        snap.complaints = loadComplaints(vault, people: snap.people)
         return snap
+    }
+
+    // MARK: complaints (symptom-first encounters)
+
+    static func loadComplaints(_ vault: VaultPaths, people: [Person]) -> [Complaint] {
+        let fm = FileManager.default
+        var out: [Complaint] = []
+        for person in people {
+            let dir = vault.complaintsDir(person.slug)
+            let subdirs = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for sub in subdirs where (try? sub.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                let cj = sub.appendingPathComponent("complaint.json")
+                guard let data = try? Data(contentsOf: cj),
+                      let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                out.append(Complaint(
+                    id: (o["id"] as? String) ?? sub.lastPathComponent,
+                    personId: (o["personId"] as? String) ?? person.slug,
+                    title: (o["title"] as? String) ?? "Concern",
+                    summary: (o["summary"] as? String) ?? "",
+                    status: (o["status"] as? String) ?? "open",
+                    openedAt: (o["openedAt"] as? String) ?? ""))
+            }
+        }
+        return out.sorted { $0.openedAt > $1.openedAt }
     }
 
     // MARK: people
@@ -182,6 +208,8 @@ nonisolated enum VaultStore {
                 let matches = stagedFrom == stagedPath || (!fm.fileExists(atPath: dest.path) && stagedFrom == nil)
                 if matches, !fm.fileExists(atPath: dest.path) {
                     do {
+                        // rawFile may be a sub-path (e.g. media/<id>/x.jpg) — create the dirs first.
+                        try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try fm.moveItem(at: URL(fileURLWithPath: stagedPath), to: dest)
                         return relativeToRoot(dest, vault)
                     } catch { return nil }
@@ -208,6 +236,7 @@ nonisolated enum VaultStore {
                 let prov = obj["provenance"] as? [String: Any]
                 if let from = (prov?["stagedFrom"] as? String) ?? (obj["stagedFrom"] as? String),
                    fm.fileExists(atPath: from) {
+                    try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? fm.moveItem(at: URL(fileURLWithPath: from), to: dest)
                 }
             }
@@ -241,6 +270,34 @@ nonisolated enum VaultStore {
         return hyps.sorted { priorityRank($0.priority) < priorityRank($1.priority) }
     }
 
+    /// Write a hypothesis to disk app-side (used when a READ-ONLY chat surfaces a new/revised next
+    /// step — the chat brain can't write files, so the app does). Mirrors the brain's layout:
+    /// people/<slug>/hypotheses/<id>/{hypothesis.json, hypothesis.md}.
+    static func saveHypothesis(_ h: Hypothesis, _ vault: VaultPaths) {
+        let slug = h.personId.isEmpty ? "_self" : h.personId
+        let dir = vault.peopleDir
+            .appendingPathComponent(slug, isDirectory: true)
+            .appendingPathComponent("hypotheses", isDirectory: true)
+            .appendingPathComponent(h.id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var json: [String: Any] = [
+            "id": h.id, "title": h.title, "whyNow": h.whyNow, "person": slug,
+            "priority": h.priority, "kind": h.kind, "status": h.status.isEmpty ? "proposed" : h.status,
+            "sourceCount": h.sourceCount,
+        ]
+        if let t = h.topTier { json["topTier"] = t }
+        if let c = h.complaintId { json["complaintId"] = c }
+        if let s = h.sessionId { json["sessionId"] = s }
+        if let p = h.askPlaceholder { json["ask"] = ["placeholder": p] }
+        if let a = h.answer { json["answer"] = a }
+        if let aa = h.answeredAt { json["answeredAt"] = aa }
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: dir.appendingPathComponent("hypothesis.json"))
+        }
+        let md = (h.body?.isEmpty == false) ? h.body! : "## \(h.title)\n\n\(h.whyNow)\n"
+        try? md.data(using: .utf8)?.write(to: dir.appendingPathComponent("hypothesis.md"))
+    }
+
     static func parseHypothesis(_ obj: [String: Any]) -> Hypothesis {
         let sc: Int = {
             if let i = obj["sourceCount"] as? Int { return i }
@@ -261,6 +318,7 @@ nonisolated enum VaultStore {
             sourceCount: sc,
             topTier: obj["topTier"] as? String,
             body: nil,
+            complaintId: (obj["complaintId"] as? String) ?? (obj["complaint_id"] as? String),
             askPlaceholder: askPlaceholder,
             answer: obj["answer"] as? String,
             answeredAt: (obj["answeredAt"] as? String) ?? (obj["answered_at"] as? String))

@@ -18,6 +18,8 @@ FILES = [
     ("settingsJson",    "settings.json",                    '{"permissions":{"deny":["Bash"]}}\n'),
     ("mcpTemplate",     "mcp.json.template",                '{"mcpServers":{}}\n'),
     ("criticalValues",  "critical-values.json",             '{"version":"0","note":"placeholder","markers":[]}\n'),
+    ("redFlagSymptoms", "red-flag-symptoms.json",           '{"schemaVersion":1,"rules":[]}\n'),
+    ("complaintPrompt", "prompts/complaint.md",             "## complaint (missing)\n"),
     ("mcpIndexMjs",     "mcp/rounds-sources/index.mjs",     "#!/usr/bin/env node\n// rounds-sources MCP (placeholder)\nprocess.stdin.resume();\n"),
 ]
 
@@ -43,7 +45,7 @@ def emit():
         "import Foundation",
         "",
         "nonisolated enum BrainResources {",
-        '    static let brainVersion = "1.0.8"',
+        '    static let brainVersion = "1.0.16"',
         "",
     ]
     for name, rel, placeholder in FILES:

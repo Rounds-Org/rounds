@@ -41,6 +41,7 @@ nonisolated struct VaultPaths: Sendable {
 
     func personDir(_ slug: String) -> URL { peopleDir.appendingPathComponent(slug, isDirectory: true) }
     func personDocs(_ slug: String) -> URL { personDir(slug).appendingPathComponent("documents", isDirectory: true) }
+    func complaintsDir(_ slug: String) -> URL { personDir(slug).appendingPathComponent("complaints", isDirectory: true) }
 
     func ensureScaffold() throws {
         let fm = FileManager.default
@@ -98,7 +99,19 @@ nonisolated struct MedDocument: Codable, Identifiable, Sendable, Hashable {
 nonisolated enum HypothesisStatus: String, Codable, Sendable { case proposed, active, snoozed, done, dismissed, superseded }
 nonisolated enum HypothesisKind: String, Codable, Sendable {
     case getMoreData = "get-more-data", trySomething = "try-something", seeSpecialist = "see-specialist", watch
-    case askUser = "ask-user"   // a patient-history question the user answers in-app
+    case askUser = "ask-user"     // a patient-history question the user answers in-app
+    case needsExam = "needs-exam" // the decisive next datum is a physical sign only a clinician can get
+}
+
+/// A symptom-first encounter the user opened (no document required). Its interview questions and
+/// next steps are Hypotheses linked back via `complaintId`. Persisted under people/<slug>/complaints/.
+nonisolated struct Complaint: Codable, Identifiable, Sendable, Hashable {
+    var id: String
+    var personId: String
+    var title: String        // short symptom label
+    var summary: String      // the user's original words
+    var status: String       // open | resolved
+    var openedAt: String     // ISO date
 }
 
 nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
@@ -113,6 +126,7 @@ nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
     var topTier: String?
     var sessionId: String?
     var body: String?
+    var complaintId: String?      // set when this step belongs to a symptom-first Complaint
     // ask-user (question) steps:
     var askPlaceholder: String?   // hint text for the answer field
     var answer: String?           // the user's recorded answer (nil until answered)
@@ -143,6 +157,8 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable, Hashable {
     var role: ChatRole
     var text: String
     var timestamp: Date
+    var references: [Reference] = []   // @-mentions attached to a user message (shown as chips)
+    var hypotheses: [Hypothesis] = []  // next steps this assistant turn created/changed (inline cards)
 }
 
 nonisolated struct ChatSummary: Codable, Identifiable, Sendable, Hashable {
@@ -201,8 +217,8 @@ nonisolated struct PlanQuestion: Sendable, Hashable {
 }
 
 /// An @-mention reference the user inserted in the input (file, person, step, or chat).
-nonisolated struct Reference: Identifiable, Hashable, Sendable {
-    enum Kind: String, Sendable { case file, person, step, chat }
+nonisolated struct Reference: Identifiable, Hashable, Sendable, Codable {
+    enum Kind: String, Sendable, Codable { case file, person, step, chat }
     var kind: Kind
     var id: String      // relativePath / slug / hypothesis id / chat id
     var label: String
@@ -225,4 +241,34 @@ nonisolated struct RoundsAlert: Codable, Sendable, Hashable {
     var value: String?
     var basis: String?
     var message: String
+
+    init(severity: String, marker: String? = nil, value: String? = nil, basis: String? = nil, message: String) {
+        self.severity = severity; self.marker = marker; self.value = value; self.basis = basis; self.message = message
+    }
+
+    // SAFETY-CRITICAL decode tolerance. The urgent banner is the app's last-line escalation, so a
+    // model wording drift must NEVER silently drop it. The brain is told to emit `severity`, but it
+    // sometimes writes the natural-language alias `level`; `message` should always be present but we
+    // never want a missing key to nuke the whole alert. Accept either key, default severity to
+    // "urgent", and tolerate a numeric `value`.
+    private enum K: String, CodingKey { case severity, level, marker, value, basis, message }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        severity = (try? c.decode(String.self, forKey: .severity))
+            ?? (try? c.decode(String.self, forKey: .level)) ?? "urgent"
+        marker = try? c.decodeIfPresent(String.self, forKey: .marker)
+        if let s = try? c.decodeIfPresent(String.self, forKey: .value) { value = s }
+        else if let n = try? c.decodeIfPresent(Double.self, forKey: .value) { value = String(n) }
+        else { value = nil }
+        basis = try? c.decodeIfPresent(String.self, forKey: .basis)
+        message = (try? c.decode(String.self, forKey: .message)) ?? ""
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: K.self)
+        try c.encode(severity, forKey: .severity)
+        try c.encodeIfPresent(marker, forKey: .marker)
+        try c.encodeIfPresent(value, forKey: .value)
+        try c.encodeIfPresent(basis, forKey: .basis)
+        try c.encode(message, forKey: .message)
+    }
 }

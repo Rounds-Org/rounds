@@ -26,6 +26,8 @@ struct DashboardView: View {
                     checklistCard
                 }
 
+                if !openComplaints.isEmpty { concernsSection }
+
                 nextSteps
 
                 if !app.chats.isEmpty {
@@ -50,7 +52,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.displayName.isEmpty ? "Hello" : "Hello, \(app.displayName)")
                     .font(.largeTitle.weight(.semibold))
-                Text("Your health researcher. Drop a document, or ask a question.")
+                Text("Your health researcher. Describe a symptom, drop a document, or ask a question.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -75,8 +77,10 @@ struct DashboardView: View {
                 }
             }
             MentionField(text: $ask, references: $askRefs,
-                         placeholder: "Ask about your health, a result, or a symptom…  (type @ to reference)",
+                         placeholder: "Describe a symptom, ask about a result, or @-reference…",
                          onSend: submit)
+            Text("Research tool grounded in sources — not medical advice, and it can be wrong.")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
@@ -88,8 +92,14 @@ struct DashboardView: View {
         guard !text.isEmpty else { return }
         let refs = askRefs
         ask = ""; askRefs = []
-        app.startNewChat()
-        app.beginSendChat(text, references: refs)
+        // Plain symptom text (no @-references) opens a persisted Complaint + history interview;
+        // questions / references go to chat.
+        if refs.isEmpty, app.looksLikeSymptom(text) {
+            app.beginComplaint(text)
+        } else {
+            app.startNewChat()
+            app.beginSendChat(text, references: refs)
+        }
     }
 
     private var checklistCard: some View {
@@ -107,6 +117,14 @@ struct DashboardView: View {
         }
         .padding(16)
         .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var openComplaints: [Complaint] { app.complaints.filter { $0.status != "resolved" } }
+    private var concernsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title: "Your concerns")
+            ForEach(openComplaints) { ComplaintCard(complaint: $0) }
+        }
     }
 
     private var nextSteps: some View {
@@ -151,29 +169,69 @@ struct DashboardView: View {
 
     @State private var showArchived = false
     private var archivedSteps: some View {
-        DisclosureGroup(isExpanded: $showArchived) {
-            VStack(spacing: 8) {
-                ForEach(archivedHypotheses) { HypothesisCard(hyp: $0) }
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation { showArchived.toggle() } } label: {
+                HStack {
+                    SectionHeader(title: "Archived steps")
+                    Text("\(archivedHypotheses.count)").font(.caption2).foregroundStyle(.tertiary)
+                    Spacer()
+                    Image(systemName: showArchived ? "chevron.up" : "chevron.down")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())   // whole header row is the hit target
             }
-            .padding(.top, 6)
-        } label: {
-            HStack {
-                SectionHeader(title: "Archived steps")
-                Text("\(archivedHypotheses.count)").font(.caption2).foregroundStyle(.tertiary)
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
+            if showArchived {
+                VStack(spacing: 8) {
+                    ForEach(archivedHypotheses) { HypothesisCard(hyp: $0) }
+                }
+                .padding(.top, 6)
             }
         }
-        .tint(.secondary)
     }
 
+    private let suggestedDocs = [
+        ("drop.fill", "A recent blood test or lab panel"),
+        ("waveform.path.ecg", "An imaging report — ultrasound, CT, MRI, X-ray"),
+        ("doc.text", "A specialist's note or discharge summary"),
+        ("camera.fill", "A photo of a symptom — skin, nail, swelling"),
+    ]
     private var emptyHypotheses: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(app.documents.isEmpty ? "Add your documents to get started." : "Ready when you are.")
-                .font(.callout)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: app.documents.isEmpty ? "tray.and.arrow.down.fill" : "checkmark.seal.fill")
+                    .foregroundStyle(app.documents.isEmpty ? Theme.accent : .green)
+                Text(app.documents.isEmpty ? "Let's get started" : "You're all caught up")
+                    .font(.callout.weight(.semibold))
+            }
             Text(app.documents.isEmpty
-                 ? "Drag a lab result or report onto the window. Rounds will ask whose it is, file it, and start finding the right next steps."
-                 : "Tap “Identify next steps” and Rounds will review what you've added and propose where to go from here.")
+                 ? "Add a health record and Rounds will read it on your Mac, file it, and propose the right next steps — nothing leaves your computer."
+                 : "No open next steps right now — that's a good place to be. Add more records and Rounds will find what's worth doing next.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Helpful things to add").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                ForEach(suggestedDocs, id: \.1) { icon, label in
+                    HStack(spacing: 7) {
+                        Image(systemName: icon).font(.caption2).foregroundStyle(Theme.accent).frame(width: 16)
+                        Text(label).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
+
+            Text(app.documents.isEmpty
+                 ? "Drag any of these onto the window — or describe a symptom in the box above."
+                 : "Drag a new record onto the window, or ask a question above.")
+                .font(.caption2).foregroundStyle(.tertiary)
+            if !app.documents.isEmpty {
+                Button { app.beginHypotheses() } label: { Label("Find next steps now", systemImage: "sparkles") }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -238,34 +296,71 @@ struct UrgentBanner: View {
     }
 }
 
+/// A symptom-first encounter card. Its interview questions + next steps render below in Next steps
+/// (linked by complaintId); this card is the persistent anchor with status + resolve/delete.
+struct ComplaintCard: View {
+    @Environment(AppState.self) private var app
+    let complaint: Complaint
+    private var linked: [Hypothesis] {
+        app.hypotheses.filter { $0.complaintId == complaint.id && !["superseded", "dismissed"].contains($0.status) }
+    }
+    private var openQuestions: Int { linked.filter { $0.isQuestion && ($0.answer?.isEmpty ?? true) }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "stethoscope").foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(complaint.title).font(.headline).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    statusLine
+                }
+                Spacer()
+                Menu {
+                    Button("Mark resolved") { app.resolveComplaint(complaint) }
+                    Button("Delete", role: .destructive) { app.deleteComplaint(complaint) }
+                } label: { Image(systemName: "ellipsis.circle").foregroundStyle(.secondary) }
+                    .menuStyle(.borderlessButton).fixedSize()
+            }
+        }
+        .padding(14)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline))
+    }
+
+    @ViewBuilder private var statusLine: some View {
+        if openQuestions > 0 {
+            Text("\(openQuestions) quick question\(openQuestions > 1 ? "s" : "") to answer below in Next steps")
+                .font(.caption).foregroundStyle(Theme.accent)
+        } else if app.identifyingNextSteps {
+            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Thinking it through…").font(.caption).foregroundStyle(.secondary) }
+        } else if linked.isEmpty {
+            Text("Reviewing your concern…").font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Your next steps for this are below.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// While next steps generate, this links to the live Claude Code session (a real chat the user can
+/// open, watch, and continue). Underlines + shows a pointer on hover; click opens the session chat.
 struct IdentifyingIndicator: View {
     @Environment(AppState.self) private var app
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            ProgressView().controlSize(.mini)
-            Text(app.nextStepsStatus.isEmpty ? "Identifying next steps…" : app.nextStepsStatus)
-                .font(.caption.weight(.medium)).foregroundStyle(Theme.accent).lineLimit(1)
-        }
-        .onHover { hovering = $0 }
-        .popover(isPresented: $hovering, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("What Rounds is doing").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                if app.nextStepsTrace.isEmpty {
-                    Text(app.nextStepsStatus.isEmpty ? "Reviewing your records…" : app.nextStepsStatus)
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                ForEach(Array(app.nextStepsTrace.suffix(8).enumerated()), id: \.offset) { i, s in
-                    HStack(spacing: 6) {
-                        Image(systemName: i == app.nextStepsTrace.count - 1 ? "circle.dotted" : "checkmark")
-                            .font(.system(size: 8)).foregroundStyle(Theme.accent)
-                        Text(s).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                }
+        Button { app.openNextStepsChat() } label: {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(app.nextStepsStatus.isEmpty ? "Identifying next steps…" : app.nextStepsStatus)
+                    .font(.caption.weight(.medium)).foregroundStyle(Theme.accent).lineLimit(1)
+                    .underline(hovering)
             }
-            .padding(12).frame(width: 360)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .onHover { hovering = $0 }
     }
 }
 

@@ -79,7 +79,7 @@ struct FileTabContent: View {
                     .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
             }
             .buttonStyle(.plain)
-            .pointerStyle(.link)
+            .linkCursor()
             .padding(20)
         }
     }

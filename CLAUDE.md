@@ -65,6 +65,18 @@ Do NOT use `--disallowedTools` to hard-block Bash, WebSearch, sub-agents, or any
 Rounds uses Sparkle (SPM: `sparkle-project/Sparkle >= 2.5.0`) for in-app updates — one click downloads, verifies, and relaunches. Do NOT remove `INFOPLIST_FILE = Info.plist` from build settings or revert to `GENERATE_INFOPLIST_FILE = YES`: the explicit `Info.plist` at the project root is required because Sparkle's EdDSA public key (`SUPublicEDKey`) lives there and a generated plist would discard it silently.
 <!-- auto-added 2026-06-22 -->
 
+## Notarization
+
+Notarize with `xcrun notarytool submit ... --keychain-profile "rounds-notary"`. The profile was set up once via `xcrun notarytool store-credentials`.
+<!-- auto-added 2026-06-22 -->
+Release builds must NOT include the `com.apple.security.get-task-allow` entitlement — Apple rejects notarization if it's present. Always archive/build with the Release configuration (or strip the entitlement explicitly); Debug builds inject it automatically.
+<!-- auto-added 2026-06-22 -->
+
+## macOS 14.0 deployment target and Compat.swift shims
+
+`MACOSX_DEPLOYMENT_TARGET = 14.0`. Several SwiftUI APIs require macOS 15+ and must NOT be used directly — use the shims in `rounds/Views/Compat.swift` instead: `.linkCursor()` (not `.pointerStyle(.link)`), `.onHeightChange { }` (not `.onGeometryChange`). When adding new SwiftUI API, verify it's available on macOS 14 before using it; if not, add a compat shim.
+<!-- auto-added 2026-06-22 -->
+
 ## Slash commands all pass through to Claude Code
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.

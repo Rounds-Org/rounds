@@ -101,8 +101,12 @@ rm -rf "$DERIVED"
 
 # ── Build, signed with Developer ID + hardened runtime (already enabled in the project) ──
 echo "==> Building Rounds $VERSION (Release, Developer ID)"
+# -destination 'generic/platform=macOS' builds a UNIVERSAL binary (arm64 + x86_64) so the app
+# runs on both Apple Silicon and Intel Macs, not just the build machine's architecture.
 xcodebuild -project "$ROOT/rounds.xcodeproj" -scheme "$SCHEME" -configuration Release \
   -derivedDataPath "$DERIVED" \
+  -destination 'generic/platform=macOS' \
+  ONLY_ACTIVE_ARCH=NO \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$DEV_ID_APP" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
@@ -160,14 +164,44 @@ notarize_or_die "$ZIP"
 echo "==> Stapling app"
 xcrun stapler staple "$APP"
 
-# ── Package the stapled app into a DMG, notarize + staple the DMG too ────────────────────
-echo "==> Packaging DMG"
+# ── Package the stapled app into a STYLED DMG (background + arrow + positioned icons) ─────
+echo "==> Packaging DMG (styled: drag-to-Applications layout)"
+VOL="Rounds $VERSION"
+DMG="$DIST/Rounds-$VERSION.dmg"
+RW="$DERIVED/rw.dmg"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/Rounds.app"
 ln -s /Applications "$STAGE/Applications"
-DMG="$DIST/Rounds-$VERSION.dmg"
-rm -f "$DMG"
-hdiutil create -quiet -volname "Rounds $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+mkdir "$STAGE/.background"
+swift "$ROOT/tools/dmg-background.swift" "$STAGE/.background/background.png"
+rm -f "$DMG" "$RW"
+# A writable image we can style in Finder, then compress to a read-only UDZO for distribution.
+hdiutil create -quiet -volname "$VOL" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$RW"
+hdiutil attach -readwrite -noverify -noautoopen "$RW" -quiet
+osascript <<OSA || echo "  (Finder styling failed — shipping the plain layout instead)"
+tell application "Finder"
+  tell disk "$VOL"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set the bounds of container window to {200, 120, 740, 500}
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to 112
+    set background picture of opts to file ".background:background.png"
+    set position of item "Rounds.app" of container window to {135, 190}
+    set position of item "Applications" of container window to {405, 190}
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+OSA
+sync
+hdiutil detach "/Volumes/$VOL" -quiet || true
+hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" -quiet
+rm -f "$RW"
 rm -rf "$STAGE"
 
 echo "==> Notarizing DMG"

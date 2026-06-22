@@ -95,6 +95,7 @@ struct ChatView: View {
     }
 
     private var transcript: some View {
+        GeometryReader { outer in
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -111,16 +112,16 @@ struct ChatView: View {
                         }
                     }
                     Color.clear.frame(height: 1).id("bottom")
+                        .background(GeometryReader { b in
+                            Color.clear.preference(key: AtBottomKey.self,
+                                value: b.frame(in: .global).maxY <= outer.frame(in: .global).maxY + 60)
+                        })
                 }
                 .padding(20)
                 .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60
-            } action: { _, nowAtBottom in
-                atBottom = nowAtBottom
-            }
+            .onPreferenceChange(AtBottomKey.self) { v in Task { @MainActor in atBottom = v } }
             .onChange(of: app.messages.count) { _, _ in if atBottom { withAnimation { proxy.scrollTo("bottom") } } }
             .onChange(of: app.liveText) { _, _ in if atBottom { proxy.scrollTo("bottom") } }
             .overlay(alignment: .bottomTrailing) {
@@ -142,8 +143,13 @@ struct ChatView: View {
             }
             .animation(.easeInOut(duration: 0.15), value: atBottom)
         }
+        }
     }
+}
 
+private struct AtBottomKey: PreferenceKey {
+    static var defaultValue: Bool = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = nextValue() }
 }
 
 struct MessageRow: View {
@@ -251,7 +257,7 @@ struct InlineStepCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .pointerStyle(.link)
+        .linkCursor()
         .background(Theme.accentSoft.opacity(hovering ? 0.8 : 0.5), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.accent.opacity(0.30)))
         .onHover { hovering = $0 }

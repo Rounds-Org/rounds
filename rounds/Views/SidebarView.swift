@@ -84,7 +84,7 @@ struct SidebarView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sidebarHeight = $0 }
+        .onHeightChange { sidebarHeight = $0 }
         .background(Theme.panel.opacity(0.5))
         .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf, .image, .plainText, .item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { app.beginImport(urls) }
@@ -190,7 +190,7 @@ struct SidebarView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 4)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { queueContentHeight = $0 }
+                .onHeightChange { queueContentHeight = $0 }
             }
             .frame(height: height)
             .scrollIndicators(.automatic)

@@ -261,7 +261,7 @@ struct DashboardView: View {
                 .contentShape(Rectangle())   // whole header row is the hit target
             }
             .buttonStyle(.plain)
-            .pointerStyle(.link)
+            .linkCursor()
             if showArchived {
                 VStack(spacing: 8) {
                     ForEach(archivedHypotheses) { HypothesisCard(hyp: $0) }
@@ -456,7 +456,7 @@ struct IdentifyingIndicator: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .pointerStyle(.link)
+        .linkCursor()
         .onHover { hovering = $0 }
     }
 }
@@ -626,7 +626,7 @@ struct SourcesHoverLabel: View {
                 .underline(hovering)
         }
         .buttonStyle(.plain)
-        .pointerStyle(.link)
+        .linkCursor()
         .onHover { hovering = $0 }
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {

@@ -147,7 +147,7 @@ struct SettingsView: View {
                             .zfont(.callout).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .pointerStyle(.link)
+                        .linkCursor()
                         if showContract {
                             ScrollView {
                                 Text(app.contractText).zfont(.caption, design: .monospaced)

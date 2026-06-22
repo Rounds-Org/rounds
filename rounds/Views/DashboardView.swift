@@ -492,9 +492,11 @@ struct HypothesisCard: View {
                 }
                 .foregroundStyle(Theme.accent)
                 Text(hyp.title).zfont(.headline).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 if !hyp.whyNow.isEmpty {
                     Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
             }
             if app.answeringStep == hyp.id {
@@ -534,9 +536,11 @@ struct HypothesisCard: View {
             .foregroundStyle(.tertiary)
             Text(hyp.title).zfont(.subheadline, .medium).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             if let a = hyp.answer, !a.isEmpty {
                 Text(a).zfont(.callout)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                     .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -553,11 +557,11 @@ struct HypothesisCard: View {
                     }
                     Text(hyp.title).zfont(.headline)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                     Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation { expanded.toggle() } }
                 Spacer()
                 Pill(text: hyp.priority, color: priorityColor)
             }
@@ -573,7 +577,18 @@ struct HypothesisCard: View {
             if expanded {
                 if let body = hyp.body {
                     Divider()
-                    MarkdownText(stripFrontMatter(body)).zfont(.callout)
+                    let clean = stripFrontMatter(body)
+                    // One selectable AttributedString so you can drag-select across ALL paragraphs
+                    // (the per-block renderer only let you select one paragraph at a time). Tables
+                    // keep the grid renderer.
+                    if MarkdownText.hasTable(clean) {
+                        MarkdownText(clean).zfont(.callout)
+                    } else {
+                        Text(MarkdownText.fullAttributed(clean))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Questions? Need clarification? Any ideas?")

@@ -13,9 +13,16 @@ import CoreImage
 
 struct ChatView: View {
     @Environment(AppState.self) private var app
-    @State private var draft = ""
-    @State private var references: [Reference] = []
     @State private var atBottom = true   // only magnet-scroll when the user is already at the bottom
+
+    // The unsent draft + @-references live on the per-chat ChatRuntime (not local @State), so they
+    // survive leaving the tab and coming back, and stay distinct per chat.
+    private func draftBinding(_ rt: ChatRuntime) -> Binding<String> {
+        Binding(get: { rt.draft }, set: { rt.draft = $0 })
+    }
+    private func refsBinding(_ rt: ChatRuntime) -> Binding<[Reference]> {
+        Binding(get: { rt.draftReferences }, set: { rt.draftReferences = $0 })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,48 +38,52 @@ struct ChatView: View {
     }
 
     private func pickupPending() {
+        guard let rt = app.activeRuntime else { return }
         if !app.pendingChatDraft.isEmpty || !app.pendingReferences.isEmpty {
-            draft = app.pendingChatDraft
-            references = app.pendingReferences
+            rt.draft = app.pendingChatDraft
+            rt.draftReferences = app.pendingReferences
             app.pendingChatDraft = ""
             app.pendingReferences = []
         }
     }
 
-    private var inputBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !references.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(references) { ref in
-                            HStack(spacing: 4) {
-                                Image(systemName: ref.iconName).zfont(.caption2)
-                                Text(ref.label).zfont(.caption2).lineLimit(1)
-                                Button { references.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
-                                    .buttonStyle(.borderless)
+    @ViewBuilder private var inputBar: some View {
+        if let rt = app.activeRuntime {
+            VStack(alignment: .leading, spacing: 6) {
+                if !rt.draftReferences.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(rt.draftReferences) { ref in
+                                HStack(spacing: 4) {
+                                    Image(systemName: ref.iconName).zfont(.caption2)
+                                    Text(ref.label).zfont(.caption2).lineLimit(1)
+                                    Button { rt.draftReferences.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
+                                        .buttonStyle(.borderless)
+                                }
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
                             }
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
                         }
                     }
                 }
+                MentionField(text: draftBinding(rt), references: refsBinding(rt),
+                             placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
+                             onSend: send, autofocus: true)
+                InputControls()
             }
-            MentionField(text: $draft, references: $references,
-                         placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
-                         onSend: send, autofocus: true)
-            InputControls()
+            .padding(12)
+            .background(Theme.panel)
+            .overlay(Divider(), alignment: .top)
         }
-        .padding(12)
-        .background(Theme.panel)
-        .overlay(Divider(), alignment: .top)
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let rt = app.activeRuntime else { return }
+        let text = rt.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !app.isStreaming else { return }
-        let refs = references
-        draft = ""
-        references = []
+        let refs = rt.draftReferences
+        rt.draft = ""
+        rt.draftReferences = []
         app.beginSendChat(text, references: refs)
     }
 

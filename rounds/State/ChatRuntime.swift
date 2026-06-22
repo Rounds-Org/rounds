@@ -30,6 +30,8 @@ final class ChatRuntime: Identifiable {
     private var lastMsgTokens = 0
     var remoteControlOn = false       // Claude Code Remote Control enabled for this chat's live session
     var remoteSessionURL: String?     // pairing URL to open this session on a phone / claude.ai
+    var draft = ""                    // unsent input text — kept per-chat so it survives leaving/returning to the tab
+    var draftReferences: [Reference] = []   // unsent @-references, likewise preserved across tab switches
     private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
 
     private var warm: WarmSession?
@@ -143,12 +145,27 @@ final class ChatRuntime: Identifiable {
             phoneLive += t
         case .finished(let text, let sid, _, _):
             if !sid.isEmpty { sessionId = sid }
-            let final = ProtocolParser.stripForDisplay(text.isEmpty ? phoneLive : text)
-            if !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: final, timestamp: Date()))
-                app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
-            }
+            let raw = text.isEmpty ? phoneLive : text
             phoneLive = ""
+            // Parse a phone-driven turn the SAME way a local turn is parsed, so its sources, alert,
+            // and any new next-step card are captured. Otherwise the Sources panel keeps the previous
+            // turn's sources while the answer cites [n] from this turn → the mismatch the user saw.
+            let parsed = ProtocolParser.parse(raw)
+            let display = parsed.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? ProtocolParser.stripForDisplay(raw) : parsed.displayText
+            if !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: display, timestamp: Date()))
+            }
+            if !parsed.sources.isEmpty { sources = parsed.sources }
+            if let a = parsed.alert { alert = a }
+            if !parsed.hypotheses.isEmpty {
+                let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId)
+                if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
+                    messages[idx].hypotheses = saved
+                }
+            }
+            app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
+            if !parsed.stepActions.isEmpty { let actions = parsed.stepActions; Task { await app.applyStepActions(actions) } }
         default:
             break
         }

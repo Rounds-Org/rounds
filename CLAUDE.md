@@ -88,10 +88,22 @@ The `--remote-control` CLI flag is interactive-only and does nothing in stream-j
 <!-- auto-added 2026-06-22 -->
 Pass `--replay-user-messages` at spawn time so phone-typed turns echo back on stdout and are rendered in the local Rounds transcript. Without this flag, messages sent from the phone are invisible locally.
 <!-- auto-added 2026-06-22 -->
+Phone-driven `.finished` turns MUST be parsed with the full `ProtocolParser.parse()` pipeline, NOT just `stripForDisplay()`. Without it, sources go stale, alerts are dropped, hypotheses are not saved, and step cards do not dismiss after the phone reply.
+<!-- auto-added 2026-06-22 -->
 
 ## Chat session persistence: front-matter sessionId and --resume
 
 Chat `.md` files store `sessionId: <id>` in their front-matter (written by `persistChat`, parsed by `VaultStore.frontMatter()`). `WarmSession` reads this via `config.resumeSessionId` and passes `--resume <id>` at startup — without it, reopened chats lose all Claude Code multi-turn memory. Do NOT change the `sessionId:` front-matter key or skip the `--resume` arg in `WarmSession`.
+<!-- auto-added 2026-06-22 -->
+
+## Chat input draft persistence across tab switches
+
+Per-chat unsent draft text and `@`-references must live on `ChatRuntime` (as `draft` and `draftReferences`), NOT in `@State` inside `ChatView`. SwiftUI destroys `@State` when the view leaves the tab, silently clearing whatever the user had typed. `ChatRuntime` outlives the view and preserves the draft correctly.
+<!-- auto-added 2026-06-22 -->
+
+## Text selection in long-form markdown body
+
+`MarkdownText`'s per-block renderer only lets the user select text within a single paragraph. For full cross-paragraph selection (e.g. expanded `HypothesisCard` body), render as `Text(MarkdownText.fullAttributed(content)).textSelection(.enabled)` instead. Exception: if the content contains tables (`MarkdownText.hasTable()`), keep the block renderer — `AttributedString` can't replicate the grid layout.
 <!-- auto-added 2026-06-22 -->
 
 ## Slash commands all pass through to Claude Code

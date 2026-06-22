@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.4",
+  "latestVersion": "1.2.5",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.4/Rounds-1.2.4.dmg",
-  "notes": "Remote control: continue any chat from your phone (or claude.ai) and keep typing on your Mac — both stay in sync, nothing blocked. Chats now keep full memory when reopened. Clearer one-time setup screen."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.5/Rounds-1.2.5.dmg",
+  "notes": "Your typed message and @-tags now survive switching tabs. Remote-control answers now show their sources (and apply next-step updates) in the app. Select and copy text anywhere in a next-step card, across paragraphs."
 }

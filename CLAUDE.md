@@ -54,3 +54,13 @@ Use `.draggable(item.id)` + `.dropDestination(for: String.self)` (NOT `onDrag`/`
 
 Do NOT use `--disallowedTools` to hard-block Bash, WebSearch, sub-agents, or any other Claude Code tool. Run with `--permission-mode bypass` and surface any permission prompts in the UI. The user explicitly corrected a design that blocked these tools.
 <!-- auto-added 2026-06-21 -->
+
+## Slash command autocomplete in MentionField
+
+`MentionField` shows a dropdown of Claude Code slash commands when the user types `/` at the start of their message. The list (`app.slashCommands`) is populated live from the `slash_commands` array in Claude Code's `system:init` event — do NOT hardcode it or remove this live-update path, since user-installed skills would then disappear from autocomplete.
+<!-- auto-added 2026-06-22 -->
+
+## Rounds-level slash commands vs Claude Code commands
+
+Rounds-native commands (e.g. `/remote-control`) are intercepted by `ChatRuntime.handleRoundsCommand()` BEFORE the message is sent to Claude Code — they never reach the model. The Dashboard ask box also guards `!text.hasPrefix("/")` before routing to the symptom interview. Keep BOTH checks in sync: adding a new Rounds command → add it to `handleRoundsCommand()`; editing the Dashboard routing → preserve the `/`-prefix bypass or `/`-commands silently land in the symptom interview instead of a chat.
+<!-- auto-added 2026-06-22 -->

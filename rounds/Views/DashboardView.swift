@@ -27,6 +27,8 @@ struct DashboardView: View {
                     checklistCard
                 }
 
+                if app.checklistComplete, !starterDone { gettingStartedCard }
+
                 if !openComplaints.isEmpty { concernsSection }
 
                 nextSteps
@@ -94,8 +96,8 @@ struct DashboardView: View {
         let refs = askRefs
         ask = ""; askRefs = []
         // Plain symptom text (no @-references) opens a persisted Complaint + history interview;
-        // questions / references go to chat.
-        if refs.isEmpty, app.looksLikeSymptom(text) {
+        // questions, references, and /-commands go to chat.
+        if refs.isEmpty, !text.hasPrefix("/"), app.looksLikeSymptom(text) {
             app.beginComplaint(text)
         } else {
             app.startNewChat()
@@ -118,6 +120,61 @@ struct DashboardView: View {
         }
         .padding(16)
         .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // Feature-discovery checklist so a new user sees what Rounds can do. Each row lights up once done.
+    private struct StarterStep: Identifiable { let id = UUID(); let icon: String; let title: String; let detail: String; let done: Bool }
+    private var starterSteps: [StarterStep] {
+        [
+            .init(icon: "tray.and.arrow.down.fill", title: "Add a health record",
+                  detail: "Drag in a lab result, report, or a photo of a test — Rounds reads it on your Mac.",
+                  done: !app.documents.isEmpty),
+            .init(icon: "checklist", title: "Get your next steps",
+                  detail: "Rounds turns your records into specific, sourced things to do next.",
+                  done: app.hypotheses.contains { !["superseded", "dismissed"].contains($0.status) }),
+            .init(icon: "bubble.left.and.text.bubble.right", title: "Answer a question from Rounds",
+                  detail: "It asks the questions a good clinician would, to narrow things down.",
+                  done: app.hypotheses.contains { $0.isQuestion && !($0.answer?.isEmpty ?? true) }),
+            .init(icon: "stethoscope", title: "Describe a symptom",
+                  detail: "Type how you feel — Rounds takes a history and proposes a workup.",
+                  done: !app.complaints.isEmpty),
+            .init(icon: "person.2.fill", title: "Add a family member",
+                  detail: "Keep records for parents, partner, kids — Rounds spots risks across the family (with their OK 🙂).",
+                  done: app.people.contains { $0.slug != "_self" }),
+            .init(icon: "doc.text.magnifyingglass", title: "Open a source",
+                  detail: "Every claim links to real medical evidence you can read yourself.",
+                  done: app.hypotheses.contains { $0.sourceCount > 0 }),
+        ]
+    }
+    private var starterDone: Bool { starterSteps.allSatisfy { $0.done } }
+
+    private var gettingStartedCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+                Text("Get started with Rounds").zfont(.callout, .semibold)
+                Spacer()
+                Text("\(starterSteps.filter(\.done).count)/\(starterSteps.count)")
+                    .zfont(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(starterSteps) { s in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: s.done ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(s.done ? Theme.accent : .secondary).zfont(.body)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(s.title).zfont(.callout, .medium)
+                            .foregroundStyle(s.done ? .secondary : .primary)
+                            .strikethrough(s.done, color: .secondary)
+                        Text(s.detail).zfont(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(16)
+        .background(Theme.accentSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent.opacity(0.18)))
     }
 
     private var openComplaints: [Complaint] { app.complaints.filter { $0.status != "resolved" } }

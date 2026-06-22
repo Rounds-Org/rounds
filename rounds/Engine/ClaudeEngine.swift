@@ -80,6 +80,7 @@ nonisolated enum RoundsEvent: Sendable {
     case toolUse(name: String, input: String)
     case toolResult(String)
     case usage(outputTokens: Int)   // cumulative output tokens for the current message (live counter)
+    case slashCommands([String])    // available Claude Code slash commands (from the init event)
     case finished(text: String, sessionId: String, isError: Bool, costUSD: Double)
     case failed(String)
 }
@@ -113,6 +114,7 @@ nonisolated struct ClaudeRun: Sendable {
     var includePartial: Bool = true
     var permissionMode: RoundsPermissionMode = .bypass
     var effort: RoundsEffort = .default
+    var remoteControl: String? = nil   // when set, start the session with --remote-control <name>
 }
 
 nonisolated enum ClaudeEngine {
@@ -256,7 +258,11 @@ nonisolated enum EventMapper {
             if (obj["subtype"] as? String) == "init",
                let sid = obj["session_id"] as? String {
                 let model = obj["model"] as? String ?? ""
-                return [.started(sessionId: sid, model: model)]
+                var events: [RoundsEvent] = [.started(sessionId: sid, model: model)]
+                if let cmds = obj["slash_commands"] as? [String], !cmds.isEmpty {
+                    events.append(.slashCommands(cmds))
+                }
+                return events
             }
             return []
 

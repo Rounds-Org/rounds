@@ -94,6 +94,10 @@ final class AppState {
     /// Effective only when the CLI is new enough.
     var fullPowerActive: Bool { fullPowerEnabled && toolPaths.supportsPermissionHooks }
 
+    /// Claude Code slash commands for the `/` autocomplete (replaced live from each session's init).
+    var slashCommands: [String] = ["context", "usage", "compact", "clear", "review", "security-review",
+                                   "deep-research", "verify", "debug", "simplify", "goal", "insights"]
+
     var pendingPermission: PendingPermission?
     var permQueue: [PendingPermission] = []
     var seenPermIds: Set<String> = []
@@ -339,8 +343,10 @@ final class AppState {
     }
 
     /// Read-only chat run config used by ChatRuntime.
-    func chatRun(prompt: String = "", resume: String? = nil) -> ClaudeRun {
-        baseRun(prompt: prompt, policy: .readOnly, resume: resume)
+    func chatRun(prompt: String = "", resume: String? = nil, remoteControl: String? = nil) -> ClaudeRun {
+        var run = baseRun(prompt: prompt, policy: .readOnly, resume: resume)
+        run.remoteControl = remoteControl
+        return run
     }
 
     func stop() { activeRuntime?.stop() }

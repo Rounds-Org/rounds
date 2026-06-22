@@ -90,6 +90,16 @@ struct ChatView: View {
                 }
             }
             Spacer()
+            if let rt = app.activeRuntime {
+                Button { rt.setRemoteControl(!rt.remoteControlOn) } label: {
+                    Label(rt.remoteControlOn ? "Remote control on" : "Remote control",
+                          systemImage: rt.remoteControlOn ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                        .zfont(.caption)
+                }
+                .buttonStyle(.borderless)
+                .tint(rt.remoteControlOn ? Theme.accent : .secondary)
+                .help("Enable Claude Code Remote Control for this chat, then connect to it from the Claude app or claude.ai to drive it remotely.")
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }

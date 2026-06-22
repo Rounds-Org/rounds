@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.0",
+  "latestVersion": "1.2.1",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.0/Rounds-1.2.0.dmg",
-  "notes": "Full Claude Code power with permission prompts, slash commands, remote control, fixed text zoom, and more."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.1/Rounds-1.2.1.dmg",
+  "notes": "Remote control as a /remote-control command, plus the 1.2.0 feature set."
 }

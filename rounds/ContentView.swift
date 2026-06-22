@@ -364,9 +364,9 @@ struct UpdateChip: View {
                 Text("Version \(update.latestVersion)").zfont(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Get") {
+            Button("Update") {
                 Analytics.track(.updateBannerClicked)
-                NSWorkspace.shared.open(update.downloadURL)
+                SparkleUpdater.shared.checkForUpdates()
             }
             .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
             if !update.mandatory {

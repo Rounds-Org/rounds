@@ -28,8 +28,6 @@ final class ChatRuntime: Identifiable {
     var liveTokens = 0          // output tokens this turn (live counter shown in the trace)
     private var tokenBase = 0   // tokens from completed messages this turn
     private var lastMsgTokens = 0
-    var remoteControlOn = false // Claude Code Remote Control enabled for this chat's session
-    private var warmRemote: String?   // the remote-control name the live warm session was started with
 
     private var warm: WarmSession?
     private var warmModel: RoundsModel?
@@ -81,28 +79,9 @@ final class ChatRuntime: Identifiable {
     func send(_ text: String, references: [Reference]) {
         let msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !msg.isEmpty else { return }
-        if handleRoundsCommand(msg) { return }   // a Rounds-level command (e.g. /remote-control) — not for Claude
         app.checkRedFlags(msg)   // deterministic Principle-6 net, before the model
         guard !isStreaming else { app.toast = "This chat is still answering — use Stop to interrupt."; return }
         task = Task { await runTurn(msg, references) }
-    }
-
-    /// Rounds-level commands handled in-app (NOT sent to Claude). Returns true if it was one.
-    /// Works from any chat, and from the Home ask box (which opens a new chat first).
-    private func handleRoundsCommand(_ msg: String) -> Bool {
-        let lower = msg.lowercased()
-        let onCmds: Set<String> = ["/remote-control", "/remote control", "/remote", "/rc",
-                                   "/remote-control on", "/remote on", "/rc on"]
-        let offCmds: Set<String> = ["/remote-control off", "/remote control off", "/remote off", "/rc off"]
-        guard onCmds.contains(lower) || offCmds.contains(lower) else { return false }
-        let turnOn = onCmds.contains(lower)
-        messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date()))
-        app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
-        setRemoteControl(turnOn)
-        append(.system, turnOn
-               ? "🛰️ Remote control is ON for this chat. Open it from the Claude app or claude.ai to drive the session remotely."
-               : "Remote control is off for this chat.")
-        return true
     }
 
     func stop() {
@@ -111,27 +90,13 @@ final class ChatRuntime: Identifiable {
         isStreaming = false; statusLine = ""; liveText = ""
     }
 
-    func modelChanged() { warm?.stop(); warm = nil; warmModel = nil; warmRemote = nil }
-
-    /// Toggle Claude Code Remote Control for THIS chat. Restarts the warm session with
-    /// `--remote-control` (resuming so context is kept) — then you connect to it from the Claude app
-    /// or claude.ai. Off = a plain restart.
-    func setRemoteControl(_ on: Bool) {
-        guard remoteControlOn != on else { return }
-        remoteControlOn = on
-        warm?.stop(); warm = nil; warmModel = nil; warmRemote = nil
-        ensureWarm()   // start it now so it connects to Remote Control immediately
-        app.toast = on
-            ? "Remote control on — open this chat from the Claude app or claude.ai to drive it."
-            : "Remote control off."
-    }
+    func modelChanged() { warm?.stop(); warm = nil; warmModel = nil }
 
     private func ensureWarm() {
-        let rc = remoteControlOn ? "rounds-\(id.prefix(8))" : nil
-        if let w = warm, w.isAlive, warmModel == app.selectedModel, warmRemote == rc { return }
+        if let w = warm, w.isAlive, warmModel == app.selectedModel { return }
         warm?.stop()
-        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId, remoteControl: rc))
-        do { try w.start(); warm = w; warmModel = app.selectedModel; warmRemote = rc } catch { warm = nil }
+        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId))
+        do { try w.start(); warm = w; warmModel = app.selectedModel } catch { warm = nil }
     }
 
     private func runTurn(_ msg: String, _ references: [Reference]) async {

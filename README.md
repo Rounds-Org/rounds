@@ -10,8 +10,9 @@
 ### ⬇️ [Download the latest release](https://github.com/Rounds-Org/rounds/releases/latest)
 
 > macOS app. Requires [Claude Code](https://claude.com/code) and [Node.js](https://nodejs.org)
-> already installed. First launch: right‑click the app → **Open** (the public builds aren't
-> notarized yet). Or [build from source](#build-from-source).
+> already installed. The build is signed and **notarized by Apple** — just open the DMG, drag
+> Rounds to Applications, and launch it. Updates install themselves from inside the app. Or
+> [build from source](#build-from-source).
 
 Clarity about your health.
 

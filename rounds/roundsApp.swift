@@ -45,6 +45,8 @@ struct roundsApp: App {
                     .keyboardShortcut(.tab, modifiers: [.control, .shift])
                 Button("Settings…") { app.showSettings = true }
                     .keyboardShortcut(",", modifiers: .command)
+                Divider()
+                Button("Check for Updates…") { app.checkForUpdate() }
             }
         }
     }

@@ -60,7 +60,12 @@ Do NOT use `--disallowedTools` to hard-block Bash, WebSearch, sub-agents, or any
 `MentionField` shows a dropdown of Claude Code slash commands when the user types `/` at the start of their message. The list (`app.slashCommands`) is populated live from the `slash_commands` array in Claude Code's `system:init` event — do NOT hardcode it or remove this live-update path, since user-installed skills would then disappear from autocomplete.
 <!-- auto-added 2026-06-22 -->
 
-## Rounds-level slash commands vs Claude Code commands
+## Sparkle auto-updater
 
-Rounds-native commands (e.g. `/remote-control`) are intercepted by `ChatRuntime.handleRoundsCommand()` BEFORE the message is sent to Claude Code — they never reach the model. The Dashboard ask box also guards `!text.hasPrefix("/")` before routing to the symptom interview. Keep BOTH checks in sync: adding a new Rounds command → add it to `handleRoundsCommand()`; editing the Dashboard routing → preserve the `/`-prefix bypass or `/`-commands silently land in the symptom interview instead of a chat.
+Rounds uses Sparkle (SPM: `sparkle-project/Sparkle >= 2.5.0`) for in-app updates — one click downloads, verifies, and relaunches. Do NOT remove `INFOPLIST_FILE = Info.plist` from build settings or revert to `GENERATE_INFOPLIST_FILE = YES`: the explicit `Info.plist` at the project root is required because Sparkle's EdDSA public key (`SUPublicEDKey`) lives there and a generated plist would discard it silently.
+<!-- auto-added 2026-06-22 -->
+
+## Slash commands all pass through to Claude Code
+
+There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.
 <!-- auto-added 2026-06-22 -->

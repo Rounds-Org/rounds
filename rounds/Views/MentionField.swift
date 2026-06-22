@@ -29,7 +29,7 @@ struct MentionField: View {
     // `/` slash commands (Claude Code) — only when the message STARTS with "/".
     private var slashItems: [String] {
         guard let q = slashQuery?.lowercased() else { return [] }
-        let all = ["remote-control"] + app.slashCommands   // Rounds command first, then Claude Code's
+        let all = app.slashCommands
         let hits = q.isEmpty ? all : all.filter { $0.lowercased().hasPrefix(q) } + all.filter { $0.lowercased().contains(q) && !$0.lowercased().hasPrefix(q) }
         return Array(NSOrderedSet(array: hits).array as? [String] ?? hits).prefix(8).map { $0 }
     }

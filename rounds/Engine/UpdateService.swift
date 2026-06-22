@@ -15,7 +15,7 @@ import Foundation
 
 nonisolated struct UpdateInfo: Sendable, Equatable {
     var latestVersion: String
-    var downloadURL: URL
+    var downloadURL: URL?   // nil when Sparkle handles the download itself
     var notes: String
     var mandatory: Bool
 }

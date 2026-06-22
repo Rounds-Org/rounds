@@ -114,7 +114,6 @@ nonisolated struct ClaudeRun: Sendable {
     var includePartial: Bool = true
     var permissionMode: RoundsPermissionMode = .bypass
     var effort: RoundsEffort = .default
-    var remoteControl: String? = nil   // when set, start the session with --remote-control <name>
 }
 
 nonisolated enum ClaudeEngine {

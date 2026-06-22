@@ -57,7 +57,6 @@ nonisolated final class WarmSession: @unchecked Sendable {
                     "--model", model.rawValue,
                     "--permission-mode", config.permissionMode.rawValue]
         if config.effort != .default { args += ["--effort", config.effort.rawValue] }
-        if let rc = config.remoteControl { args += ["--remote-control", rc] }
         if let mcp = config.mcpConfigPath { args += ["--strict-mcp-config", "--mcp-config", mcp] }
         if let settings = config.settingsPath { args += ["--settings", settings] }
         if let sys = config.appendSystemPrompt { args += ["--append-system-prompt", sys] }

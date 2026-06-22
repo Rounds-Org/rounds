@@ -242,7 +242,7 @@ final class AppState {
         writeEffectiveSettings()       // settings file Rounds passes (adds the permission hook in full mode)
         startPermissionWatcher()       // watch for tool-permission requests from the hook
         booted = true
-        Task { await checkForUpdate() }   // non-blocking
+        setUpUpdater()   // wire Sparkle's auto-updater to the banner + start background checks
 
         // Self-heal: if existing next-step cards were generated in a different language than the
         // user's current answer language, quietly rewrite them into it (once — guarded by a stamp).
@@ -282,11 +282,19 @@ final class AppState {
         reload()
     }
 
-    func checkForUpdate() async {
-        if let info = await UpdateService.check(currentVersion: UpdateService.currentAppVersion) {
-            updateAvailable = info
+    /// Wire Sparkle's auto-updater to our banner and start background checks. Sparkle downloads,
+    /// verifies the EdDSA signature, and installs + relaunches on one click — see SparkleUpdater.
+    func setUpUpdater() {
+        SparkleUpdater.shared.onUpdateFound = { [weak self] info in
+            self?.updateAvailable = info
+            self?.updateDismissed = false
         }
+        SparkleUpdater.shared.onNoUpdate = { [weak self] in self?.updateAvailable = nil }
+        SparkleUpdater.shared.start()
     }
+
+    /// User asked to update now (banner / menu) → Sparkle's install-and-relaunch flow.
+    func checkForUpdate() { SparkleUpdater.shared.checkForUpdates() }
 
     func dismissUpdate() { updateDismissed = true }
 
@@ -343,10 +351,8 @@ final class AppState {
     }
 
     /// Read-only chat run config used by ChatRuntime.
-    func chatRun(prompt: String = "", resume: String? = nil, remoteControl: String? = nil) -> ClaudeRun {
-        var run = baseRun(prompt: prompt, policy: .readOnly, resume: resume)
-        run.remoteControl = remoteControl
-        return run
+    func chatRun(prompt: String = "", resume: String? = nil) -> ClaudeRun {
+        baseRun(prompt: prompt, policy: .readOnly, resume: resume)
     }
 
     func stop() { activeRuntime?.stop() }

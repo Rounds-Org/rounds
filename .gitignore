@@ -49,3 +49,5 @@ dist/*.dmg
 # Release build output
 build-release/
 dist/*.zip
+
+dist/

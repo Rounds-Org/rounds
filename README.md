@@ -2,6 +2,11 @@
 
 **Your health researcher. Runs on your Mac. Powered by Claude Code.**
 
+[![Latest release](https://img.shields.io/github/v/release/Rounds-Org/rounds?label=download&sort=semver)](https://github.com/Rounds-Org/rounds/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Rounds-Org/rounds/total)](https://github.com/Rounds-Org/rounds/releases)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+[![License](https://img.shields.io/github/license/Rounds-Org/rounds)](LICENSE)
+
 ### ⬇️ [Download the latest release](https://github.com/Rounds-Org/rounds/releases/latest)
 
 > macOS app. Requires [Claude Code](https://claude.com/code) and [Node.js](https://nodejs.org)

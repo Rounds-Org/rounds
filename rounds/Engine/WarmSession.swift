@@ -26,6 +26,9 @@ nonisolated final class WarmSession: @unchecked Sendable {
 
     private let lock = NSLock()
     private var current: AsyncStream<RoundsEvent>.Continuation?
+    /// Events arriving OUTSIDE a send() turn (e.g. a turn driven from the phone via remote control)
+    /// are routed here instead of being dropped. Set by ChatRuntime; invoked on the parse queue.
+    var onPassive: (@Sendable (RoundsEvent) -> Void)?
     private var sawResultThisTurn = false
     private var _sessionId: String?
     private var _turnCount = 0
@@ -54,8 +57,12 @@ nonisolated final class WarmSession: @unchecked Sendable {
         var args = ["--input-format", "stream-json",
                     "--output-format", "stream-json",
                     "--verbose", "--include-partial-messages",
+                    "--replay-user-messages",   // echo user turns (incl. phone-typed via remote control) on stdout so Rounds mirrors them
                     "--model", model.rawValue,
                     "--permission-mode", config.permissionMode.rawValue]
+        // Resume the chat's prior Claude session so the model keeps full multi-turn memory
+        // (without this the warm session starts blank and re-grounds only from files).
+        if let resume = config.resumeSessionId, !resume.isEmpty { args += ["--resume", resume] }
         if config.effort != .default { args += ["--effort", config.effort.rawValue] }
         if let mcp = config.mcpConfigPath { args += ["--strict-mcp-config", "--mcp-config", mcp] }
         if let settings = config.settingsPath { args += ["--settings", settings] }
@@ -129,6 +136,20 @@ nonisolated final class WarmSession: @unchecked Sendable {
         }
     }
 
+    /// Enable/disable Claude Code Remote Control on this LIVE session — the same mechanism the
+    /// VS Code extension uses: an in-band `control_request` written to stdin. The reply
+    /// (`control_response`) carries the pairing `session_url`, surfaced as a `.remoteControl` event.
+    func sendControl(enabled: Bool, name: String?) {
+        var request: [String: Any] = ["subtype": "remote_control", "enabled": enabled]
+        if enabled, let name { request["name"] = name }
+        let msg: [String: Any] = ["type": "control_request", "request_id": UUID().uuidString, "request": request]
+        guard let body = try? JSONSerialization.data(withJSONObject: msg) else { return }
+        var data = body; data.append(0x0A)
+        lock.lock(); let alive = _alive; lock.unlock()
+        guard alive else { return }
+        try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
+    }
+
     func stop() {
         lock.lock(); _alive = false; lock.unlock()
         try? stdinPipe.fileHandleForWriting.close()
@@ -154,13 +175,17 @@ nonisolated final class WarmSession: @unchecked Sendable {
                 lock.lock()
                 if !sid.isEmpty { _sessionId = sid }
                 let c = current
-                sawResultThisTurn = true
+                if c != nil { sawResultThisTurn = true }
                 lock.unlock()
-                c?.yield(.finished(text: text, sessionId: sid, isError: isError, costUSD: cost))
-                finishTurn(failure: nil)
+                if let c {
+                    c.yield(.finished(text: text, sessionId: sid, isError: isError, costUSD: cost))
+                    finishTurn(failure: nil)
+                } else {
+                    onPassive?(event)   // a turn driven from the phone (no active local turn)
+                }
             default:
                 lock.lock(); let c = current; lock.unlock()
-                c?.yield(event)
+                if let c { c.yield(event) } else { onPassive?(event) }
             }
         }
     }

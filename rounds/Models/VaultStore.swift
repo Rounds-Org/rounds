@@ -355,8 +355,8 @@ nonisolated enum VaultStore {
         for url in items where url.pathExtension.lowercased() == "md" {
             let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
             let id = url.deletingPathExtension().lastPathComponent
-            let title = firstHeading(in: url) ?? id
-            chats.append(ChatSummary(id: id, title: title, hypothesisId: nil, updatedAt: mod, sessionId: nil))
+            let (title, sid) = frontMatter(in: url)
+            chats.append(ChatSummary(id: id, title: title ?? id, hypothesisId: nil, updatedAt: mod, sessionId: sid))
         }
         return chats.sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -375,6 +375,23 @@ nonisolated enum VaultStore {
         guard let data = try? Data(contentsOf: url),
               let s = try? JSONDecoder().decode([Source].self, from: data) else { return [] }
         return s
+    }
+
+    /// Parse the chat's front-matter (title + the Claude sessionId used for --resume). Without the
+    /// sessionId a reopened chat starts blank; with it the warm session resumes full memory.
+    private static func frontMatter(in url: URL) -> (title: String?, sessionId: String?) {
+        guard let s = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
+        var title: String?, sid: String?
+        for line in s.split(separator: "\n").prefix(8) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("title:") {
+                title = String(t.dropFirst(6)).trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            } else if t.hasPrefix("sessionId:") {
+                let v = String(t.dropFirst("sessionId:".count)).trimmingCharacters(in: .whitespaces)
+                sid = v.isEmpty ? nil : v
+            }
+        }
+        return (title, sid)
     }
 
     private static func firstHeading(in url: URL) -> String? {

@@ -81,6 +81,8 @@ nonisolated enum RoundsEvent: Sendable {
     case toolResult(String)
     case usage(outputTokens: Int)   // cumulative output tokens for the current message (live counter)
     case slashCommands([String])    // available Claude Code slash commands (from the init event)
+    case userMessage(String)        // an inbound user turn — e.g. typed from the phone via remote control
+    case remoteControl(sessionURL: String?)   // control_response to a remote_control request (carries the pairing URL)
     case finished(text: String, sessionId: String, isError: Bool, costUSD: Double)
     case failed(String)
 }
@@ -302,13 +304,27 @@ nonisolated enum EventMapper {
             return events
 
         case "user":
-            // tool_result blocks come back as a user message.
+            // A user turn on the stream. Two flavors: tool_result blocks (from our own tools), and
+            // plain text — which, when we didn't type it ourselves, is an inbound message from the
+            // phone via remote control. Render the latter as a user bubble.
             guard let message = obj["message"] as? [String: Any] else { return [] }
+            if let text = message["content"] as? String, !text.isEmpty {
+                return [.userMessage(text)]
+            }
             if let content = message["content"] as? [[String: Any]] {
                 for block in content where (block["type"] as? String) == "tool_result" {
-                    let summary = stringifyToolResult(block["content"])
-                    return [.toolResult(summary)]
+                    return [.toolResult(stringifyToolResult(block["content"]))]
                 }
+                let texts = content.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }
+                if !texts.isEmpty { return [.userMessage(texts.joined(separator: "\n"))] }
+            }
+            return []
+
+        case "control_response":
+            // Reply to a control_request. For remote_control enable it carries the pairing session_url.
+            if let resp = obj["response"] as? [String: Any],
+               let url = (resp["response"] as? [String: Any])?["session_url"] as? String, !url.isEmpty {
+                return [.remoteControl(sessionURL: url)]
             }
             return []
 

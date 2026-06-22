@@ -8,6 +8,8 @@
 //
 
 import SwiftUI
+import AppKit
+import CoreImage
 
 struct ChatView: View {
     @Environment(AppState.self) private var app
@@ -18,6 +20,7 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let rt = app.activeRuntime, rt.remoteControlOn { remoteBar(rt) }
             Divider()
             transcript
             inputBar
@@ -90,8 +93,60 @@ struct ChatView: View {
                 }
             }
             Spacer()
+            if let rt = app.activeRuntime {
+                Button { rt.setRemoteControl(!rt.remoteControlOn) } label: {
+                    Label(rt.remoteControlOn ? "On your phone" : "Remote control",
+                          systemImage: rt.remoteControlOn ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                        .zfont(.caption)
+                }
+                .buttonStyle(.borderless)
+                .tint(rt.remoteControlOn ? Theme.accent : .secondary)
+                .help("Continue this chat on your phone. Turns it into a Claude Code Remote Control session — open the link / scan the QR on your phone, or find it in the Claude app.")
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    /// Shown when remote control is on: the pairing URL + a QR to scan with a phone. Messages typed
+    /// on the phone appear in this same transcript; you can keep typing here too.
+    private func remoteBar(_ rt: ChatRuntime) -> some View {
+        HStack(spacing: 12) {
+            if let url = rt.remoteSessionURL, let qr = Self.qrImage(url) {
+                Image(nsImage: qr).interpolation(.none).resizable().frame(width: 54, height: 54)
+                    .background(.white).cornerRadius(4)
+            } else {
+                ProgressView().controlSize(.small).frame(width: 54, height: 54)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Remote control on — open this chat on your phone").zfont(.caption, .medium)
+                if let url = rt.remoteSessionURL {
+                    Text(url).zfont(.caption2).foregroundStyle(Theme.accent).lineLimit(1).truncationMode(.middle)
+                    HStack(spacing: 12) {
+                        Button { NSWorkspace.shared.open(URL(string: url)!) } label: { Text("Open here") }
+                        Button {
+                            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url, forType: .string)
+                            app.toast = "Link copied"
+                        } label: { Text("Copy link") }
+                    }
+                    .buttonStyle(.borderless).zfont(.caption2)
+                } else {
+                    Text("Connecting to the relay…").zfont(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Theme.accentSoft)
+    }
+
+    static func qrImage(_ string: String) -> NSImage? {
+        guard let data = string.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let ci = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        let rep = NSCIImageRep(ciImage: ci)
+        let img = NSImage(size: rep.size); img.addRepresentation(rep); return img
     }
 
     private var transcript: some View {

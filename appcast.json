@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.3",
+  "latestVersion": "1.2.4",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.3/Rounds-1.2.3.dmg",
-  "notes": "Now runs on macOS 14 Sonoma and later (the previous build was accidentally limited to the newest macOS), universal for both Apple Silicon and Intel Macs, notarized, with one-click auto-updates."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.4/Rounds-1.2.4.dmg",
+  "notes": "Remote control: continue any chat from your phone (or claude.ai) and keep typing on your Mac — both stay in sync, nothing blocked. Chats now keep full memory when reopened. Clearer one-time setup screen."
 }

@@ -28,6 +28,9 @@ final class ChatRuntime: Identifiable {
     var liveTokens = 0          // output tokens this turn (live counter shown in the trace)
     private var tokenBase = 0   // tokens from completed messages this turn
     private var lastMsgTokens = 0
+    var remoteControlOn = false       // Claude Code Remote Control enabled for this chat's live session
+    var remoteSessionURL: String?     // pairing URL to open this session on a phone / claude.ai
+    private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
 
     private var warm: WarmSession?
     private var warmModel: RoundsModel?
@@ -96,7 +99,59 @@ final class ChatRuntime: Identifiable {
         if let w = warm, w.isAlive, warmModel == app.selectedModel { return }
         warm?.stop()
         let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId))
+        w.onPassive = { [weak self] event in Task { @MainActor in self?.handlePassive(event) } }
         do { try w.start(); warm = w; warmModel = app.selectedModel } catch { warm = nil }
+    }
+
+    /// Toggle Claude Code Remote Control for THIS chat's live session — the VS Code mechanism:
+    /// an in-band control_request on the warm stream-json session. The reply's `session_url` lets
+    /// you open the SAME session on your phone / claude.ai; messages typed there flow back in as
+    /// passive events (rendered via `handlePassive`), and locally-typed turns still work normally.
+    func setRemoteControl(_ on: Bool) {
+        ensureWarm()
+        remoteControlOn = on
+        if !on {
+            remoteSessionURL = nil
+            warm?.sendControl(enabled: false, name: nil)
+            app.toast = "Remote control off."
+            return
+        }
+        app.toast = "Turning on remote control…"
+        let name = "rounds-\(id.prefix(8))"
+        // Give a freshly-spawned warm session a moment to emit its init before the control_request.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            self?.warm?.sendControl(enabled: true, name: name)
+        }
+    }
+
+    /// Events that arrive OUTSIDE a local send() turn — i.e. a turn someone drove from the phone via
+    /// remote control, plus the control_response carrying the pairing URL. Renders phone turns into
+    /// the same `messages` list so the laptop and phone stay in sync.
+    private func handlePassive(_ event: RoundsEvent) {
+        switch event {
+        case .remoteControl(let url):
+            if let url, !url.isEmpty {
+                remoteSessionURL = url; remoteControlOn = true
+                app.toast = "Remote control on — open this chat on your phone."
+            }
+        case .userMessage(let text):
+            phoneLive = ""
+            messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: text, timestamp: Date()))
+            app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
+        case .textDelta(let t):
+            phoneLive += t
+        case .finished(let text, let sid, _, _):
+            if !sid.isEmpty { sessionId = sid }
+            let final = ProtocolParser.stripForDisplay(text.isEmpty ? phoneLive : text)
+            if !final.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: final, timestamp: Date()))
+                app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
+            }
+            phoneLive = ""
+        default:
+            break
+        }
     }
 
     private func runTurn(_ msg: String, _ references: [Reference]) async {
@@ -254,6 +309,8 @@ final class ChatRuntime: Identifiable {
                 hadError = true
                 statusLine = "Error: \(m)"
                 if let notice = AppState.billingMessage(m) { app.engineNotice = notice }
+            case .userMessage, .remoteControl:
+                break   // remote-control / phone-driven events are handled passively, not in a local turn
             }
         }
         return (ProtocolParser.parse(fullText), sid, completed && !hadError)

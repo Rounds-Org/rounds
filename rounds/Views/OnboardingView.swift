@@ -189,41 +189,60 @@ struct OnboardingView: View {
     // MARK: checklist
 
     private var checklistSlide: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("One-time setup").zfont(.title2, .semibold)
-                Text("Rounds' brain is Claude Code, which runs on Node.js. You fund your own Claude usage — Rounds adds no cost of its own.")
-                    .zfont(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            ChecklistRow(done: app.toolPaths.claudeInstalled, title: "Claude Code",
-                         detail: app.toolPaths.claude ?? "Not found — install from claude.com/code",
-                         link: app.toolPaths.claudeInstalled ? nil : "https://claude.com/code")
-            ChecklistRow(done: app.toolPaths.nodeInstalled, title: "Node.js",
-                         detail: app.toolPaths.node ?? "Not found — install from nodejs.org",
-                         link: app.toolPaths.nodeInstalled ? nil : "https://nodejs.org")
-            ChecklistRow(done: app.brainInstalled, title: "Rounds brain",
-                         detail: app.brainInstalled ? "Installed in ~/Rounds" : "Installs automatically once the tools are found")
-
-            HStack {
-                Button {
-                    rechecking = true
-                    Task { await app.refreshTools(); rechecking = false }
-                } label: {
-                    Label(rechecking ? "Checking…" : "Re-check", systemImage: "arrow.clockwise")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("One-time setup").zfont(.title2, .semibold)
+                    Text("Rounds is a Mac app. Its brain is Claude Code — the AI — which runs on Node.js. Both live on your own Mac; Rounds has no servers. These two just need to be installed once. Here's what Rounds found on your machine:")
+                        .zfont(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .disabled(rechecking)
-                Spacer()
-                HStack(spacing: 6) {
-                    Text("Model").zfont(.caption).foregroundStyle(.secondary)
-                    ModelPicker()
+
+                ChecklistRow(done: app.toolPaths.claudeInstalled, title: "Claude Code",
+                             detail: app.toolPaths.claude ?? "Not found — install from claude.com/code",
+                             link: app.toolPaths.claudeInstalled ? nil : "https://claude.com/code")
+                ChecklistRow(done: app.toolPaths.nodeInstalled, title: "Node.js",
+                             detail: app.toolPaths.node ?? "Not found — install from nodejs.org",
+                             link: app.toolPaths.nodeInstalled ? nil : "https://nodejs.org")
+                ChecklistRow(done: app.brainInstalled, title: "Rounds brain",
+                             detail: app.brainInstalled ? "Installed in ~/Rounds" : "Installs automatically once the tools above are found")
+
+                // Prominent escape hatch for non-technical users: screenshot this window → Claude.
+                HStack(alignment: .top, spacing: 13) {
+                    Image(systemName: "camera.viewfinder")
+                        .zfont(.largeTitle).foregroundStyle(Theme.accent)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Don't want to install this yourself? Let Claude do it.")
+                            .zfont(.headline)
+                        Text("Take a screenshot of this window — press ⌘⇧4, then Space, then click the window — and send it to Claude (the Claude app, or claude.ai). Claude can see exactly what's missing here and will install it for you, or walk you through it step by step.")
+                            .zfont(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .padding(15)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.accent.opacity(0.55), lineWidth: 1.5))
+
+                HStack {
+                    Button {
+                        rechecking = true
+                        Task { await app.refreshTools(); rechecking = false }
+                    } label: {
+                        Label(rechecking ? "Checking…" : "Re-check", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(rechecking)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text("Model").zfont(.caption).foregroundStyle(.secondary)
+                        ModelPicker()
+                    }
+                }
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
+            .padding(.horizontal, 30).padding(.vertical, 22)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 30).padding(.vertical, 22)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: about

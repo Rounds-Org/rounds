@@ -77,6 +77,23 @@ Release builds must NOT include the `com.apple.security.get-task-allow` entitlem
 `MACOSX_DEPLOYMENT_TARGET = 14.0`. Several SwiftUI APIs require macOS 15+ and must NOT be used directly — use the shims in `rounds/Views/Compat.swift` instead: `.linkCursor()` (not `.pointerStyle(.link)`), `.onHeightChange { }` (not `.onGeometryChange`). When adding new SwiftUI API, verify it's available on macOS 14 before using it; if not, add a compat shim.
 <!-- auto-added 2026-06-22 -->
 
+## PTY remote-control: local JSONL does not capture turns
+
+In `--remote-control` PTY mode, conversation messages are NOT written to the local session JSONL — only an `ai-title` line appears there. To read turns back in Rounds, scrape the PTY output stream directly; do NOT tail the transcript file.
+<!-- auto-added 2026-06-22 -->
+
+## Remote control in stream-json mode: use control_request, not --remote-control flag
+
+The `--remote-control` CLI flag is interactive-only and does nothing in stream-json mode. To enable remote control from Rounds' existing stream-json session, send a `control_request` on stdin after `system/init`: `{"type":"control_request","request_id":"<uuid>","request":{"subtype":"remote_control","enabled":true,"name":"..."}}`. The `control_response` contains `session_url` for phone pairing. Phone messages arrive as ordinary `user` messages on the same stdout stream. Disable with `enabled:false`. This is an internal SDK protocol surface that can change between CLI versions.
+<!-- auto-added 2026-06-22 -->
+Pass `--replay-user-messages` at spawn time so phone-typed turns echo back on stdout and are rendered in the local Rounds transcript. Without this flag, messages sent from the phone are invisible locally.
+<!-- auto-added 2026-06-22 -->
+
+## Chat session persistence: front-matter sessionId and --resume
+
+Chat `.md` files store `sessionId: <id>` in their front-matter (written by `persistChat`, parsed by `VaultStore.frontMatter()`). `WarmSession` reads this via `config.resumeSessionId` and passes `--resume <id>` at startup — without it, reopened chats lose all Claude Code multi-turn memory. Do NOT change the `sessionId:` front-matter key or skip the `--resume` arg in `WarmSession`.
+<!-- auto-added 2026-06-22 -->
+
 ## Slash commands all pass through to Claude Code
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.

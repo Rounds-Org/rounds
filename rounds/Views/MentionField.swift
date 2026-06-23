@@ -21,7 +21,7 @@ struct MentionField: View {
     @State private var mentionQuery: String?
     @State private var slashQuery: String?
     @State private var selected = 0
-    @FocusState private var focused: Bool
+    @State private var editorHeight: CGFloat = 24
 
     private var items: [Reference] { mentionQuery.map { app.mentionCandidates($0) } ?? [] }
     private var menuOpen: Bool { mentionQuery != nil && !items.isEmpty }
@@ -39,31 +39,18 @@ struct MentionField: View {
         VStack(alignment: .leading, spacing: 0) {
             if menuOpen { menu }
             if slashMenuOpen { slashMenu }
-            HStack(spacing: 10) {
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...6)
-                    .focused($focused)
+            HStack(alignment: .bottom, spacing: 10) {
+                ChatInputEditor(text: $text, height: $editorHeight, placeholder: placeholder, autofocus: autofocus,
+                                onEnter: handleEnter, onArrow: handleArrow, onEscape: handleEscape)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: editorHeight)
                     .onChange(of: text) { _, new in updateTriggers(new) }
-                    .onKeyPress { press in handleKey(press) }
                 Button(action: trySend) {
                     Image(systemName: "arrow.up.circle.fill").zfont(.title2)
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(text.isEmpty ? .secondary : Theme.accent)
                 .disabled(text.isEmpty || app.isStreaming)
-            }
-        }
-        .onAppear {
-            if autofocus {
-                focused = true
-                // Pre-filled text gets select-all on focus by default — move the caret to the end.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                    if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
-                        let end = (editor.string as NSString).length
-                        editor.setSelectedRange(NSRange(location: end, length: 0))
-                    }
-                }
             }
         }
     }
@@ -98,24 +85,21 @@ struct MentionField: View {
         .padding(.bottom, 6)
     }
 
-    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        let anyMenu = menuOpen || slashMenuOpen
-        switch press.key {
-        case .upArrow where anyMenu:
-            selected = max(0, selected - 1); return .handled
-        case .downArrow where anyMenu:
-            let count = slashMenuOpen ? slashItems.count : items.count
-            selected = min(count - 1, selected + 1); return .handled
-        case .escape where anyMenu:
-            mentionQuery = nil; slashQuery = nil; return .handled
-        case .return:
-            if slashMenuOpen { pickSlash(slashItems[min(selected, slashItems.count - 1)]); return .handled }
-            if menuOpen { pick(items[min(selected, items.count - 1)]); return .handled }
-            if press.modifiers.contains(.shift) { text += "\n"; return .handled }   // newline
-            trySend(); return .handled
-        default:
-            return .ignored
-        }
+    // Special keys routed from the native editor (ChatInputEditor). Return true if consumed.
+    private func handleEnter() -> Bool {
+        if slashMenuOpen { pickSlash(slashItems[min(selected, slashItems.count - 1)]); return true }
+        if menuOpen { pick(items[min(selected, items.count - 1)]); return true }
+        trySend(); return true
+    }
+    private func handleArrow(_ up: Bool) -> Bool {
+        guard menuOpen || slashMenuOpen else { return false }
+        if up { selected = max(0, selected - 1) }
+        else { selected = min((slashMenuOpen ? slashItems.count : items.count) - 1, selected + 1) }
+        return true
+    }
+    private func handleEscape() -> Bool {
+        guard menuOpen || slashMenuOpen else { return false }
+        mentionQuery = nil; slashQuery = nil; return true
     }
 
     private func updateTriggers(_ s: String) {
@@ -173,7 +157,6 @@ struct MentionField: View {
         text = "/\(cmd) "   // trailing space closes the menu; press ↩ to run (or add arguments first)
         slashQuery = nil
         selected = 0
-        focused = true
     }
 
     private func pick(_ ref: Reference) {

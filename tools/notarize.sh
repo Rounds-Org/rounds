@@ -164,8 +164,9 @@ notarize_or_die "$ZIP"
 echo "==> Stapling app"
 xcrun stapler staple "$APP"
 
-# ── Package the stapled app into a STYLED DMG (background + arrow + positioned icons) ─────
-echo "==> Packaging DMG (styled: drag-to-Applications layout)"
+# ── Package the stapled app into a DMG (styled drag-to-Applications layout when Finder
+# automation is available; otherwise a plain but fully functional DMG) ────────────────────
+echo "==> Packaging DMG"
 VOL="Rounds $VERSION"
 DMG="$DIST/Rounds-$VERSION.dmg"
 RW="$DERIVED/rw.dmg"
@@ -173,12 +174,14 @@ STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/Rounds.app"
 ln -s /Applications "$STAGE/Applications"
 mkdir "$STAGE/.background"
-swift "$ROOT/tools/dmg-background.swift" "$STAGE/.background/background.png"
+swift "$ROOT/tools/dmg-background.swift" "$STAGE/.background/background.png" || true
 rm -f "$DMG" "$RW"
-# A writable image we can style in Finder, then compress to a read-only UDZO for distribution.
 hdiutil create -quiet -volname "$VOL" -srcfolder "$STAGE" -fs HFS+ -format UDRW -ov "$RW"
-hdiutil attach -readwrite -noverify -noautoopen "$RW" -quiet
-osascript <<OSA || echo "  (Finder styling failed — shipping the plain layout instead)"
+DEV="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | grep -oE '/dev/disk[0-9]+' | head -1)"
+styled=0
+# Best-effort Finder styling (background + positioned icons). Needs Apple-events authorization
+# to control Finder; if that's unavailable (-1743) we just ship a plain DMG.
+osascript <<OSA && styled=1 || echo "  (Finder styling unavailable — shipping a plain drag-to-Applications DMG)"
 tell application "Finder"
   tell disk "$VOL"
     open
@@ -199,8 +202,13 @@ tell application "Finder"
 end tell
 OSA
 sync
-hdiutil detach "/Volumes/$VOL" -quiet || true
-hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" -quiet
+[ -n "$DEV" ] && { hdiutil detach "$DEV" -quiet 2>/dev/null || hdiutil detach "$DEV" -force 2>/dev/null || true; }
+if [ "$styled" = 1 ]; then
+  hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" -quiet
+else
+  rm -f "$DMG"
+  hdiutil create -quiet -volname "$VOL" -srcfolder "$STAGE" -ov -format UDZO "$DMG"   # plain fallback
+fi
 rm -f "$RW"
 rm -rf "$STAGE"
 

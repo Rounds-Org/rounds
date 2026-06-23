@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.5",
+  "latestVersion": "1.2.6",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.5/Rounds-1.2.5.dmg",
-  "notes": "Your typed message and @-tags now survive switching tabs. Remote-control answers now show their sources (and apply next-step updates) in the app. Select and copy text anywhere in a next-step card, across paragraphs."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.6/Rounds-1.2.6.dmg",
+  "notes": "Rebuilt chat input — real scrolling, long lines wrap, Shift+Enter adds a newline where the cursor is. Long tasks (building a document, deep searches) no longer get cut off mid-work. Streaming text no longer runs sentences together. Reopened chats keep their full text. Select and copy text anywhere in a next-step card."
 }

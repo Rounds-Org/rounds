@@ -36,8 +36,11 @@ nonisolated final class WarmSession: @unchecked Sendable {
     private var stderrBuf = Data()
     private var parser: LineParser!
 
-    /// A turn that produces no `result` while the process stays alive would otherwise hang.
-    private let turnTimeout: TimeInterval = 300
+    /// A turn is killed only if it goes SILENT this long (no events at all) with no result — a true
+    /// hang. An actively-working turn (tool calls, streaming text) keeps resetting the timer, so a
+    /// long multi-step run (deep search, building a document) is never cut off mid-work.
+    private let idleTimeout: TimeInterval = 180
+    private var lastActivityAt = Date()
 
     init(model: RoundsModel, config: ClaudeRun) {
         self.model = model
@@ -112,14 +115,10 @@ nonisolated final class WarmSession: @unchecked Sendable {
             let turn = _turnCount
             lock.unlock()
 
-            // Watchdog: never let a turn hang forever.
-            parseQueue.asyncAfter(deadline: .now() + turnTimeout) { [weak self] in
-                guard let self else { return }
-                self.lock.lock()
-                let stillThisTurn = (self._turnCount == turn && !self.sawResultThisTurn)
-                self.lock.unlock()
-                if stillThisTurn { self.finishTurn(failure: "This turn timed out.") }
-            }
+            // Idle watchdog: end the turn only if it goes silent (a real hang), never because it's
+            // taking a long time doing real work (e.g. many searches + building a document).
+            lock.lock(); lastActivityAt = Date(); lock.unlock()
+            scheduleWatchdog(turn)
 
             let msg: [String: Any] = ["type": "user",
                                       "message": ["role": "user",
@@ -150,6 +149,20 @@ nonisolated final class WarmSession: @unchecked Sendable {
         try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
     }
 
+    /// Re-arm every 30s; finish the turn only after `idleTimeout` of complete silence with no result.
+    private func scheduleWatchdog(_ turn: Int) {
+        parseQueue.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let active = (self._turnCount == turn && !self.sawResultThisTurn && self._alive)
+            let idle = Date().timeIntervalSince(self.lastActivityAt)
+            self.lock.unlock()
+            guard active else { return }                                  // turn already finished
+            if idle > self.idleTimeout { self.finishTurn(failure: "This turn stalled.") }
+            else { self.scheduleWatchdog(turn) }                          // still working — keep watching
+        }
+    }
+
     func stop() {
         lock.lock(); _alive = false; lock.unlock()
         try? stdinPipe.fileHandleForWriting.close()
@@ -167,6 +180,7 @@ nonisolated final class WarmSession: @unchecked Sendable {
     }
 
     private func handle(_ obj: [String: Any]) {
+        lock.lock(); lastActivityAt = Date(); lock.unlock()   // any output means the turn is alive
         for event in EventMapper.map(obj) {
             switch event {
             case .started(let sid, _):

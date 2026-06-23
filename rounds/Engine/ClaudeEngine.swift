@@ -271,6 +271,13 @@ nonisolated enum EventMapper {
             // Token-by-token deltas for the live typing feel + live token usage for the counter.
             if let event = obj["event"] as? [String: Any] {
                 let et = event["type"] as? String
+                // Claude streams the "thinking out loud" narration between tool calls as SEPARATE
+                // text blocks. Insert a paragraph break at each text block start so the end of one
+                // block doesn't run into the next ("…his case.Let me read…").
+                if et == "content_block_start",
+                   ((event["content_block"] as? [String: Any])?["type"] as? String) == "text" {
+                    return [.textDelta("\n\n")]
+                }
                 if et == "content_block_delta",
                    let delta = event["delta"] as? [String: Any],
                    let text = delta["text"] as? String {

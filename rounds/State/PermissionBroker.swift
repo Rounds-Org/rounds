@@ -83,7 +83,7 @@ extension AppState {
             let hook = vault.brainDir.appendingPathComponent("mcp/permission-hook.mjs").path
             base["hooks"] = [
                 "PreToolUse": [[
-                    "matcher": "Bash|Task|WebSearch|KillShell|ToolSearch",
+                    "matcher": "Bash|Task|WebSearch|KillShell|ToolSearch|Write|Edit|MultiEdit",
                     "hooks": [["type": "command", "command": "\"\(node)\" \"\(hook)\""]],
                 ]],
             ]

@@ -627,7 +627,9 @@ final class AppState {
         let title = titleOverride ?? msgs.first(where: { $0.role == .user })?.text.prefix(60).description
             ?? msgs.first(where: { $0.role != .system })?.text.prefix(60).description ?? "Chat"
         var md = "---\ntitle: \"\(title.replacingOccurrences(of: "\"", with: "'"))\"\nsessionId: \(sessionId ?? "")\n---\n\n"
-        for m in msgs { md += "## \(m.role.rawValue)\n\n\(m.text)\n\n" }
+        // Sentinel delimiter (an HTML comment) so an assistant message containing a markdown
+        // "## heading" can't be mistaken for a message boundary and truncated on reload.
+        for m in msgs { md += "<!-- rounds:msg role=\(m.role.rawValue) -->\n\n\(m.text)\n\n" }
         let url = vault.chatsDir.appendingPathComponent("\(chatId).md")
         try? FileManager.default.createDirectory(at: vault.chatsDir, withIntermediateDirectories: true)
         try? md.data(using: .utf8)?.write(to: url)
@@ -649,10 +651,18 @@ final class AppState {
             }
             buf = ""
         }
-        for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.hasPrefix("## ") {
+        for raw in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            if line.hasPrefix("<!-- rounds:msg role=") {
                 flush()
-                role = ChatRole(rawValue: line.dropFirst(3).trimmingCharacters(in: .whitespaces))
+                let r = line.replacingOccurrences(of: "<!-- rounds:msg role=", with: "")
+                    .replacingOccurrences(of: "-->", with: "").trimmingCharacters(in: .whitespaces)
+                role = ChatRole(rawValue: r)
+            } else if line == "## user" || line == "## assistant" || line == "## system" {
+                // Legacy delimiter (files written before the sentinel): ONLY a bare role line is a
+                // boundary — an in-body "## Heading" is kept as body, so long messages aren't truncated.
+                flush()
+                role = ChatRole(rawValue: String(line.dropFirst(3)))
             } else if role != nil {
                 buf += line + "\n"
             }

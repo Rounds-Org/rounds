@@ -106,6 +106,31 @@ Per-chat unsent draft text and `@`-references must live on `ChatRuntime` (as `dr
 `MarkdownText`'s per-block renderer only lets the user select text within a single paragraph. For full cross-paragraph selection (e.g. expanded `HypothesisCard` body), render as `Text(MarkdownText.fullAttributed(content)).textSelection(.enabled)` instead. Exception: if the content contains tables (`MarkdownText.hasTable()`), keep the block renderer — `AttributedString` can't replicate the grid layout.
 <!-- auto-added 2026-06-22 -->
 
+## Full-power chat: Write/Edit must route through hook, not --allowedTools
+
+In `PermissionBroker.writeEffectiveSettings`, `Write|Edit|MultiEdit` MUST be in the PreToolUse hook matcher — do NOT also add them to `--allowedTools`. Listing them in `--allowedTools` bypasses the Rounds Allow/Deny dialog and auto-approves silently; omitting them from the hook causes writes to silently fail with no dialog. The hook (permission-hook.mjs) is what surfaces the dialog via `PermissionBroker.scanPermRequests`.
+<!-- auto-added 2026-06-23 -->
+
+## Chat file message delimiters
+
+Chat `.md` files use `<!-- rounds:msg role=<role> -->` HTML comment sentinels as message boundaries (written by `persistChat`, parsed by `loadChat`). Do NOT revert to `## role` headers — an assistant response containing a `## Heading` would be parsed as a role boundary and silently truncate the message on reload. Legacy files with `## role` are still parsed (bare role lines only, not in-body headings).
+<!-- auto-added 2026-06-23 -->
+
+## Chat input: native NSTextView required
+
+SwiftUI's `TextField(axis: .vertical).lineLimit(...)` does NOT scroll on macOS when text overflows the visible area. The chat input uses `ChatInputEditor` (`NSViewRepresentable` wrapping `NSTextView`) — do NOT replace it with a SwiftUI `TextField`.
+<!-- auto-added 2026-06-23 -->
+
+## ClaudeEngine: insert paragraph break between streaming text blocks
+
+Claude's `stream-json` output emits narration segments (between tool calls) as separate `content_block_start`/`content_block_end` text blocks. Without a separator, the end of one block runs directly into the next ("…his case.Let me read…"). In `ClaudeEngine.swift`, emit `.textDelta("\n\n")` on every `content_block_start` where `content_block.type == "text"`.
+<!-- auto-added 2026-06-23 -->
+
+## WarmSession turn watchdog: idle timeout, not fixed duration
+
+Do NOT use a fixed-duration turn timeout (e.g. 300 s) — it kills legitimate long-running turns (deep searches, building documents). Use an activity-based idle timeout instead: reset `lastActivityAt` on every stdout event; fire `finishTurn` only if the turn has been completely silent for `idleTimeout` seconds. A re-arming polling loop (every 30 s) is cheaper than a one-shot `asyncAfter` that can't distinguish "working" from "hung".
+<!-- auto-added 2026-06-24 -->
+
 ## Slash commands all pass through to Claude Code
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.

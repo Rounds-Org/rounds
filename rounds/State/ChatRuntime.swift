@@ -291,6 +291,7 @@ final class ChatRuntime: Identifiable {
         var completed = false
         var hadError = false
         liveTokens = 0; tokenBase = 0; lastMsgTokens = 0
+        trace = []; statusLine = ""; liveText = ""   // fresh turn — don't carry over the previous run's steps
         for await event in stream {
             switch event {
             case .started(let s, _):

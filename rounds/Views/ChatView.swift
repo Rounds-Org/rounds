@@ -66,6 +66,24 @@ struct ChatView: View {
                         }
                     }
                 }
+                if !rt.queued.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Queued — sends after this reply").zfont(.caption2).foregroundStyle(.secondary)
+                        ForEach(rt.queued) { q in
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "clock").zfont(.caption2).foregroundStyle(.secondary)
+                                Text(q.text).zfont(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button { rt.queued.removeAll { $0.id == q.id } } label: { Image(systemName: "xmark").zfont(size: 9) }
+                                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                                    .help("Remove from queue")
+                            }
+                            .padding(.horizontal, 9).padding(.vertical, 6)
+                            .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
+                        }
+                    }
+                }
                 MentionField(text: draftBinding(rt), references: refsBinding(rt),
                              placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
                              onSend: send, autofocus: true)
@@ -80,7 +98,7 @@ struct ChatView: View {
     private func send() {
         guard let rt = app.activeRuntime else { return }
         let text = rt.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !app.isStreaming else { return }
+        guard !text.isEmpty else { return }   // mid-stream is fine now — ChatRuntime queues it
         let refs = rt.draftReferences
         rt.draft = ""
         rt.draftReferences = []

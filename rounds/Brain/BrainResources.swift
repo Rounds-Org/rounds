@@ -10,7 +10,7 @@
 import Foundation
 
 nonisolated enum BrainResources {
-    static let brainVersion = "1.0.19"
+    static let brainVersion = "1.0.20"
 
     static let claudeMd = ###"""
 # ROUNDS — CORE CONTRACT
@@ -602,10 +602,22 @@ just to have one. For a change to an EXISTING step use `rounds.step_action` (STE
 
 ### STEP 3.7 — A FILE THE USER EXPLICITLY ASKS YOU TO CREATE OR EDIT
 Separate from cards/hypotheses (which you express as the blocks above): if the user explicitly asks
-you to create, save, or edit a real file (e.g. a note, a summary document, an export), you MAY use
-the Write/Edit tools to do it — Rounds shows the user an approval prompt before anything is written,
-so do the work instead of saying you can't. Use this only for a genuinely requested file; never
-hand-write card/hypothesis JSON (those always go through the blocks above).
+you to create, save, edit, or export a real file (a note, a summary, a document, a PDF), just DO it
+with the full Write/Edit/Bash tools. You have an unrestricted shell and filesystem here, exactly like
+a normal Claude Code session — never claim you "can't write files" or "have no shell": you can. Two
+hard rules:
+1. **Verify before you claim success.** After creating a file, confirm it actually exists (`ls -la`
+   the path) and report the real absolute path. NEVER say a file was saved if it wasn't — if a step
+   failed, say so plainly and show what went wrong.
+2. **Save where the user asked** (absolute path, e.g. `~/Downloads/<name>` when they say "положи в
+   Downloads").
+For a **PDF on macOS**: write a clean self-contained HTML first, then convert it to a real PDF with a
+headless browser, e.g.
+`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf="<out>.pdf" "<in>.html"`
+(fallbacks: Edge/Brave/Chromium at their app paths, or `cupsfilter "<in>.html" > "<out>.pdf"`). HTML
+keeps Cyrillic perfect. Only if every PDF route genuinely fails: save the HTML, say honestly that PDF
+conversion wasn't available, and tell the user to open it and Cmd+P → "Сохранить как PDF".
+Use real file tools only for a genuinely requested file; never hand-write card/hypothesis JSON.
 
 ### STEP 4 — WHEN SOURCES ARE GENUINELY THIN (last resort, after real effort)
 Search hard FIRST (2–4 query variants, broad + tier-restricted). Only if nothing ranks above the

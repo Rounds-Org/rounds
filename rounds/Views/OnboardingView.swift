@@ -193,7 +193,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("One-time setup").zfont(.title2, .semibold)
-                    Text("Rounds is a Mac app. Its brain is Claude Code — the AI — which runs on Node.js. Both live on your own Mac; Rounds has no servers. These two just need to be installed once. Here's what Rounds found on your machine:")
+                    Text("Rounds runs entirely on your Mac — no servers. Its AI brain, Claude Code, runs on Node.js; both just need installing once. Here's what Rounds found:")
                         .zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -207,7 +207,27 @@ struct OnboardingView: View {
                 ChecklistRow(done: app.brainInstalled, title: "Rounds brain",
                              detail: app.brainInstalled ? "Installed in ~/Rounds" : "Installs automatically once the tools above are found")
 
-                // Prominent escape hatch for non-technical users: screenshot this window → Claude.
+                // Primary action right under the checklist — visible without scrolling.
+                HStack {
+                    Button {
+                        rechecking = true
+                        Task { await app.refreshTools(); rechecking = false }
+                    } label: {
+                        Label(rechecking ? "Checking…" : "Re-check", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(rechecking)
+                    Text("After installing, press Re-check.")
+                        .zfont(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text("Model").zfont(.caption).foregroundStyle(.secondary)
+                        ModelPicker()
+                    }
+                }
+                .padding(.top, 2)
+
+                // Escape hatch for non-technical users: screenshot this window → Claude.
                 HStack(alignment: .top, spacing: 13) {
                     Image(systemName: "camera.viewfinder")
                         .zfont(.largeTitle).foregroundStyle(Theme.accent)
@@ -223,22 +243,6 @@ struct OnboardingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.accent.opacity(0.55), lineWidth: 1.5))
-
-                HStack {
-                    Button {
-                        rechecking = true
-                        Task { await app.refreshTools(); rechecking = false }
-                    } label: {
-                        Label(rechecking ? "Checking…" : "Re-check", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(rechecking)
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text("Model").zfont(.caption).foregroundStyle(.secondary)
-                        ModelPicker()
-                    }
-                }
-                .padding(.top, 2)
             }
             .padding(.horizontal, 30).padding(.vertical, 22)
             .frame(maxWidth: .infinity, alignment: .topLeading)

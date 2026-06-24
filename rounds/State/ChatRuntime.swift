@@ -9,6 +9,14 @@
 import Foundation
 import Observation
 
+/// A message the user sent while a turn was still streaming. Held in `ChatRuntime.queued`,
+/// shown as a grey deletable chip, and dispatched (in order) the moment the active turn ends.
+struct QueuedTurn: Identifiable, Equatable {
+    let id = UUID().uuidString
+    let text: String
+    var references: [Reference] = []
+}
+
 @MainActor
 @Observable
 final class ChatRuntime: Identifiable {
@@ -32,6 +40,7 @@ final class ChatRuntime: Identifiable {
     var remoteSessionURL: String?     // pairing URL to open this session on a phone / claude.ai
     var draft = ""                    // unsent input text — kept per-chat so it survives leaving/returning to the tab
     var draftReferences: [Reference] = []   // unsent @-references, likewise preserved across tab switches
+    var queued: [QueuedTurn] = []     // messages typed mid-stream: grey deletable chips, sent in order once the turn ends
     private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
 
     private var warm: WarmSession?
@@ -85,14 +94,35 @@ final class ChatRuntime: Identifiable {
         let msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !msg.isEmpty else { return }
         app.checkRedFlags(msg)   // deterministic Principle-6 net, before the model
-        guard !isStreaming else { app.toast = "This chat is still answering — use Stop to interrupt."; return }
-        task = Task { await runTurn(msg, references) }
+        // Mid-stream: don't drop the message. Queue it (shown as a grey, deletable chip) and it
+        // fires automatically the instant the current turn finishes. Claude Code answers turns
+        // sequentially, so this lands the same end result as the VS Code extension's follow-ups.
+        if isStreaming {
+            queued.append(QueuedTurn(text: msg, references: references))
+            return
+        }
+        isStreaming = true   // close the gate now so a fast follow-up queues instead of racing
+        task = Task { await runQueue(first: QueuedTurn(text: msg, references: references)) }
+    }
+
+    /// Run the first turn, then drain any messages queued while it (and each later one) streamed,
+    /// in order. `isStreaming` stays true for the whole drain so follow-ups keep queueing, not racing.
+    private func runQueue(first: QueuedTurn) async {
+        // Only this task resets streaming state on NORMAL completion. If it was cancelled (Stop),
+        // stop() already reset it — and a fresh turn may now own isStreaming, so don't clobber it.
+        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = "" } }
+        var turn: QueuedTurn? = first
+        while let t = turn, !Task.isCancelled {
+            await runTurn(t.text, t.references)
+            turn = queued.isEmpty ? nil : queued.removeFirst()
+        }
     }
 
     func stop() {
         task?.cancel()
         warm?.stop(); warm = nil; warmModel = nil
         isStreaming = false; statusLine = ""; liveText = ""
+        queued.removeAll()
     }
 
     func modelChanged() { warm?.stop(); warm = nil; warmModel = nil }
@@ -174,9 +204,7 @@ final class ChatRuntime: Identifiable {
     private func runTurn(_ msg: String, _ references: [Reference]) async {
         messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date(), references: references))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)   // shows in Recent immediately
-        isStreaming = true
-        statusLine = "Thinking…"; liveText = ""; trace = []
-        defer { isStreaming = false; statusLine = ""; liveText = "" }
+        statusLine = "Thinking…"; liveText = ""; trace = []   // isStreaming is owned by runQueue across the whole drain
 
         ensureWarm()
         let firstTurn = (warm?.turnCount ?? 0) == 0
@@ -186,6 +214,7 @@ final class ChatRuntime: Identifiable {
         if let w = warm {
             (parsed, sid, ok) = await consume(w.send(prompt))
             if !ok {
+                if Task.isCancelled { return }   // user hit Stop — don't cold-respawn a phantom answer
                 warm?.stop(); warm = nil
                 let cold = app.chatPrompt(msg, references: references, firstTurn: true)
                 (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId)))

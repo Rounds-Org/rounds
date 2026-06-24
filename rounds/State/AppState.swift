@@ -327,14 +327,15 @@ final class AppState {
     // MARK: - Run helper
 
     func baseRun(prompt: String, policy: ToolPolicy, resume: String?) -> ClaudeRun {
-        // Full power: no hard tool blocks; risky tools prompt via the PreToolUse hook (permission
-        // mode "default" + the hook-augmented settings). Otherwise: the safe restricted defaults.
+        // Full power: fully unrestricted, like the VS Code extension in bypass mode — every tool
+        // runs with no prompts (bypassPermissions + a deny-list-free settings file, no gate hook).
+        // Otherwise: the safe restricted defaults.
         var pol = policy
         var mode = permissionMode
         var settings = FileManager.default.fileExists(atPath: vault.brainSettings.path) ? vault.brainSettings.path : nil
         if fullPowerActive {
             pol = ToolPolicy(allowed: policy.allowed, disallowed: [])
-            mode = .standard
+            mode = .bypass
             if FileManager.default.fileExists(atPath: effectiveSettingsURL.path) { settings = effectiveSettingsURL.path }
         }
         return ClaudeRun(prompt: prompt,
@@ -669,6 +670,35 @@ final class AppState {
         }
         flush()
         return msgs
+    }
+
+    // MARK: - Tab context-menu copy actions
+
+    func copyChatTitle(_ chatId: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(chatTitle(chatId), forType: .string)
+    }
+
+    /// Copy the whole chat (all turns, role-labelled) to the clipboard. Uses the in-memory
+    /// transcript when the chat is open, otherwise reads the persisted .md.
+    func copyChatTranscript(_ chatId: String) {
+        let live = chatRuntimes[chatId]?.messages ?? []
+        let msgs = live.isEmpty ? loadTranscript(chatId) : live
+        let body = msgs
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { m -> String in
+                let label: String
+                switch m.role {
+                case .user: label = "You"
+                case .assistant: label = "Rounds"
+                case .system: label = "System"
+                }
+                return "\(label):\n\(m.text)"
+            }
+            .joined(separator: "\n\n")
+        let text = "# \(chatTitle(chatId))\n\n\(body)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Document intake (batch: analyze ALL dropped files together, then ask the fewest questions)

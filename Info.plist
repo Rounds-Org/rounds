@@ -11,5 +11,9 @@
 	<string>1rEiY0g387CDEZKG4Kq8wzwy1ySXWcH0OGd6mpf2sc8=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- Check hourly while running (3600 = Sparkle's minimum), not the 24h default — a Rounds
+	     window can stay open for months. SparkleUpdater also re-checks on wake/app-activation. -->
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 </dict>
 </plist>

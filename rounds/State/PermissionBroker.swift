@@ -74,19 +74,21 @@ extension AppState {
         return ""
     }
 
-    /// Write the settings file Rounds passes via --settings. In full-power mode it adds the
-    /// PreToolUse permission hook (matching the risky tools) on top of the installed brain settings.
+    /// Write the settings file Rounds passes via --settings. In full-power mode Claude Code runs
+    /// FULLY UNRESTRICTED — like the VS Code extension in bypass mode: the brain's hard deny-list
+    /// (Bash/WebSearch/Task/…) is lifted, every tool runs with no per-action approval dialog, and
+    /// the blocking PreToolUse hook is dropped. Nothing is gated; what Claude does stays visible in
+    /// the activity trace. In safe mode the brain's restrictive deny-list is left intact (no hook).
     func writeEffectiveSettings() {
         let fm = FileManager.default
         var base: [String: Any] = (try? JSONSerialization.jsonObject(with: Data(contentsOf: vault.brainSettings))) as? [String: Any] ?? [:]
-        if fullPowerActive, let node = toolPaths.node {
-            let hook = vault.brainDir.appendingPathComponent("mcp/permission-hook.mjs").path
-            base["hooks"] = [
-                "PreToolUse": [[
-                    "matcher": "Bash|Task|WebSearch|KillShell|ToolSearch|Write|Edit|MultiEdit",
-                    "hooks": [["type": "command", "command": "\"\(node)\" \"\(hook)\""]],
-                ]],
-            ]
+        if fullPowerActive {
+            // Trust everything: clear the deny-list and run all tools with no prompts. Drop the gate.
+            var perms = (base["permissions"] as? [String: Any]) ?? [:]
+            perms["deny"] = [String]()
+            perms["defaultMode"] = "bypassPermissions"
+            base["permissions"] = perms
+            base.removeValue(forKey: "hooks")
         } else {
             base.removeValue(forKey: "hooks")
         }

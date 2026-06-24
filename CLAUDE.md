@@ -1,5 +1,9 @@
 # Rounds — Project Rules
 
+## Mid-stream sends queue — do NOT re-add an isStreaming send-guard
+
+Typing + Enter/click while a turn is streaming is allowed: the message is QUEUED (grey deletable chips in the input bar, `ChatRuntime.queued`) and auto-dispatched FIFO the instant the turn ends. Do NOT re-add `app.isStreaming`/`isStreaming` guards to the send path — there are TWO widgets that each had one (`MentionField.trySend` + its send-button `.disabled`, and `ChatView.send`); re-adding any of them silently makes the queue unreachable. `runQueue` owns `isStreaming` for the WHOLE drain (set true in `ChatRuntime.send` before the Task, reset only on NON-cancelled completion so a Stop→immediately-send can't be clobbered). `stop()` clears `queued`. The warm session is strictly one-turn-at-a-time (`runQueue` awaits each `runTurn` fully before the next), so never start a second `WarmSession.send` concurrently.
+
 ## App Sandbox
 
 App Sandbox is intentionally disabled (`ENABLE_APP_SANDBOX = NO` in project.pbxproj).
@@ -50,9 +54,15 @@ After `.scaleEffect(s, anchor: .topLeading)` you MUST add a second `.frame(width
 Use `.draggable(item.id)` + `.dropDestination(for: String.self)` (NOT `onDrag`/`onDrop`/`DropDelegate`) for tab reordering. The `DropDelegate` approach silently breaks on macOS and produces no movement.
 <!-- auto-added 2026-06-21 -->
 
-## Claude Code must run unrestricted
+## Claude Code must run unrestricted (full power = true bypass, no gating)
 
-Do NOT use `--disallowedTools` to hard-block Bash, WebSearch, sub-agents, or any other Claude Code tool. Run with `--permission-mode bypass` and surface any permission prompts in the UI. The user explicitly corrected a design that blocked these tools.
+In **Full Power** mode (the default, `fullPowerActive`), chat runs Claude Code FULLY UNRESTRICTED — exactly like the VS Code extension in bypass mode. There is NO per-action approval dialog and NO hard-deny list. Concretely:
+- `baseRun` passes `--permission-mode bypassPermissions` (`mode = .bypass`) when full power.
+- `PermissionBroker.writeEffectiveSettings` clears `permissions.deny` to `[]`, sets `permissions.defaultMode = "bypassPermissions"`, and **drops the PreToolUse hook** for full power. (Safe mode keeps the brain's restrictive deny-list, still no hook.)
+- Do NOT reintroduce `--disallowedTools` blocks or a blocking PreToolUse permission hook in full power. The user repeatedly and explicitly asked for an unrestricted Claude Code they fully trust; a gating dialog caused real bugs (Bash hard-denied → no PDFs; Write timed out into deny after 180 s → "files won't create").
+
+The `permission-hook.mjs` + `PendingPermission`/`respondPermission` dialog code still exists but is **dormant** (never wired in either mode now). It's kept only as scaffolding if a future opt-in "ask me about shell" mode is wanted. Do NOT re-enable it by default.
+<!-- updated 2026-06-24: was a blocking-dialog design; user wanted full trust -->
 <!-- auto-added 2026-06-21 -->
 
 ## Slash command autocomplete in MentionField
@@ -64,6 +74,8 @@ Do NOT use `--disallowedTools` to hard-block Bash, WebSearch, sub-agents, or any
 
 Rounds uses Sparkle (SPM: `sparkle-project/Sparkle >= 2.5.0`) for in-app updates — one click downloads, verifies, and relaunches. Do NOT remove `INFOPLIST_FILE = Info.plist` from build settings or revert to `GENERATE_INFOPLIST_FILE = YES`: the explicit `Info.plist` at the project root is required because Sparkle's EdDSA public key (`SUPublicEDKey`) lives there and a generated plist would discard it silently.
 <!-- auto-added 2026-06-22 -->
+Sparkle's default check interval is 24 h — far too infrequent for a Mac app that stays open for months. Set `updateCheckInterval = 3600` (Sparkle's enforced minimum) and register `NSWorkspace.didWakeNotification` + `NSApplication.didBecomeActiveNotification` observers in `SparkleUpdater.start()` to trigger a silent background re-check on wake/activation. Both the Info.plist key (`SUScheduledCheckInterval`) and the in-code assignment must be set.
+<!-- auto-added 2026-06-24 -->
 
 ## Notarization
 
@@ -106,9 +118,10 @@ Per-chat unsent draft text and `@`-references must live on `ChatRuntime` (as `dr
 `MarkdownText`'s per-block renderer only lets the user select text within a single paragraph. For full cross-paragraph selection (e.g. expanded `HypothesisCard` body), render as `Text(MarkdownText.fullAttributed(content)).textSelection(.enabled)` instead. Exception: if the content contains tables (`MarkdownText.hasTable()`), keep the block renderer — `AttributedString` can't replicate the grid layout.
 <!-- auto-added 2026-06-22 -->
 
-## Full-power chat: Write/Edit must route through hook, not --allowedTools
+## Full-power chat: file writes & shell just run (no hook, no dialog)
 
-In `PermissionBroker.writeEffectiveSettings`, `Write|Edit|MultiEdit` MUST be in the PreToolUse hook matcher — do NOT also add them to `--allowedTools`. Listing them in `--allowedTools` bypasses the Rounds Allow/Deny dialog and auto-approves silently; omitting them from the hook causes writes to silently fail with no dialog. The hook (permission-hook.mjs) is what surfaces the dialog via `PermissionBroker.scanPermRequests`.
+OBSOLETE design note (kept for context): full power used to route `Write|Edit|MultiEdit` through a blocking PreToolUse hook that surfaced a Rounds Allow/Deny dialog. That gating is GONE — see "Claude Code must run unrestricted" above. Full power now runs `bypassPermissions` with an empty deny-list and no hook, so Write/Edit/MultiEdit/Bash all execute directly. Do NOT re-add a hook matcher or `--disallowedTools` for these.
+<!-- updated 2026-06-24 -->
 <!-- auto-added 2026-06-23 -->
 
 ## Chat file message delimiters

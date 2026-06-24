@@ -319,6 +319,11 @@ private struct CenterTabBar: View {
                 Button("Reveal in Finder") { app.revealInFinder(doc) }
                 Divider()
                 Button("Close Tab") { app.closeTab(item) }
+            } else if case .chat(let id) = item {
+                Button("Copy title") { app.copyChatTitle(id) }
+                Button("Copy whole chat") { app.copyChatTranscript(id) }
+                Divider()
+                Button("Close Tab") { app.closeTab(item) }
             } else if item != .home {
                 Button("Close Tab") { app.closeTab(item) }
             }

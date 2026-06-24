@@ -97,7 +97,7 @@ struct SettingsView: View {
                             Toggle(isOn: Binding(get: { app.fullPowerEnabled }, set: { app.fullPowerEnabled = $0 })) {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("Full Claude Code power").zfont(.callout, .medium)
-                                    Text("Unlock the shell, web search, and sub-agents. Rounds asks your approval before each risky action.")
+                                    Text("Unlock the shell, web search, sub-agents, and file writing — Claude Code runs fully unrestricted, like the VS Code extension. No approval prompts; everything it does shows in the activity trace.")
                                         .zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                                 }
                             }.toggleStyle(.switch).tint(Theme.accent)
@@ -115,10 +115,10 @@ struct SettingsView: View {
                         }
                         VStack(alignment: .leading, spacing: 5) {
                             permRow("checkmark.circle.fill", Theme.accent, "Always allowed (no prompt)", "Read files · search your records · look up medical sources · file & update your documents")
-                            permRow(app.fullPowerActive ? "hand.raised.fill" : "xmark.octagon.fill",
-                                    Theme.warn,
-                                    app.fullPowerActive ? "Asks first" : "Blocked in safe mode",
-                                    "Shell (Bash) · web search · sub-agents" + (app.fullPowerActive ? " — Rounds shows an Allow/Deny dialog" : ""))
+                            permRow(app.fullPowerActive ? "bolt.fill" : "xmark.octagon.fill",
+                                    app.fullPowerActive ? Theme.accent : Theme.warn,
+                                    app.fullPowerActive ? "Runs freely — no prompts" : "Blocked in safe mode",
+                                    "Shell (Bash) · web search · sub-agents" + (app.fullPowerActive ? " — runs unrestricted; visible in the activity trace" : ""))
                         }
                         .padding(10).frame(maxWidth: .infinity, alignment: .leading)
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))

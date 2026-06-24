@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import AppKit
 import Sparkle
 
 @MainActor
@@ -17,6 +18,7 @@ final class SparkleUpdater: NSObject, SPUUpdaterDelegate {
     static let shared = SparkleUpdater()
 
     private var controller: SPUStandardUpdaterController!
+    private var lastBackgroundCheck = Date.distantPast
 
     /// Called when Sparkle finds (or stops finding) an update, so AppState can drive the banner.
     var onUpdateFound: ((UpdateInfo) -> Void)?
@@ -27,10 +29,34 @@ final class SparkleUpdater: NSObject, SPUUpdaterDelegate {
         // startingUpdater: true → begins automatic background checks immediately.
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         controller.updater.automaticallyChecksForUpdates = true
+        // Don't rely on Sparkle's 24h default — a Rounds window can stay open for months. Check
+        // hourly (3600 is Sparkle's enforced minimum); the scheduler fires this timer even while
+        // the app keeps running, so it's not a launch-only check.
+        controller.updater.updateCheckInterval = 3600
     }
 
-    /// No-op hook; the updater is already started in init. Call once at launch to force creation.
-    func start() { _ = controller }
+    /// Called once at launch. Registers wake/activate triggers so a Mac that was asleep for days
+    /// (where the periodic timer can drift) re-checks promptly the moment the user comes back —
+    /// silently, only surfacing the banner if there's actually a newer build.
+    func start() {
+        _ = controller
+        NotificationCenter.default.addObserver(self, selector: #selector(wakeOrActivate),
+                                               name: NSApplication.didBecomeActiveNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wakeOrActivate),
+                                                          name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    @objc nonisolated private func wakeOrActivate() {
+        Task { @MainActor in self.runBackgroundCheck() }
+    }
+
+    /// A silent background check, throttled to at most once per hour on top of Sparkle's own timer.
+    private func runBackgroundCheck() {
+        guard controller.updater.canCheckForUpdates,
+              Date().timeIntervalSince(lastBackgroundCheck) >= 3600 else { return }
+        lastBackgroundCheck = Date()
+        controller.updater.checkForUpdatesInBackground()
+    }
 
     /// Show Sparkle's update flow: download → verify signature → install & relaunch.
     /// Used by the sidebar banner and the "Check for Updates…" menu item.

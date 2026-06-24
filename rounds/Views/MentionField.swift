@@ -50,7 +50,7 @@ struct MentionField: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(text.isEmpty ? .secondary : Theme.accent)
-                .disabled(text.isEmpty || app.isStreaming)
+                .disabled(text.isEmpty)   // mid-stream is allowed now — the message gets queued
             }
         }
     }
@@ -175,7 +175,7 @@ struct MentionField: View {
     }
 
     private func trySend() {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !app.isStreaming else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }   // mid-stream OK — queued
         mentionQuery = nil
         onSend()
     }

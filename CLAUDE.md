@@ -144,6 +144,11 @@ Claude's `stream-json` output emits narration segments (between tool calls) as s
 Do NOT use a fixed-duration turn timeout (e.g. 300 s) — it kills legitimate long-running turns (deep searches, building documents). Use an activity-based idle timeout instead: reset `lastActivityAt` on every stdout event; fire `finishTurn` only if the turn has been completely silent for `idleTimeout` seconds. A re-arming polling loop (every 30 s) is cheaper than a one-shot `asyncAfter` that can't distinguish "working" from "hung".
 <!-- auto-added 2026-06-24 -->
 
+## Amplitude analytics key: build-time secret injection
+
+The Amplitude ingestion key is NEVER committed. Store it in `secrets/amplitude.env` (gitignored) as `AMPLITUDE_API_KEY=<key>`. `tools/notarize.sh` sources that file and passes the key to xcodebuild; `Info.plist` holds `$(AMPLITUDE_API_KEY)` which resolves at build time. `AnalyticsService.swift` reads `AmplitudeAPIKey` from `Bundle.main` and treats an empty value or unexpanded `$(` placeholder as "analytics disabled — no network calls". A clean checkout with no `secrets/` file silently disables analytics, which is correct for open-source builds.
+<!-- auto-added 2026-06-25 -->
+
 ## Slash commands all pass through to Claude Code
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.

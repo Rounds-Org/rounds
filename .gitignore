@@ -51,3 +51,6 @@ build-release/
 dist/*.zip
 
 dist/
+
+# Local secrets (analytics key, etc.) — injected at build time, never committed
+secrets/

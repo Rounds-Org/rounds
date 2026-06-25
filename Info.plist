@@ -11,6 +11,11 @@
 	<string>1rEiY0g387CDEZKG4Kq8wzwy1ySXWcH0OGd6mpf2sc8=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- Amplitude ingestion key, injected at build time from the AMPLITUDE_API_KEY build setting
+	     (see tools/notarize.sh + secrets/amplitude.env). Empty in the public repo / unset builds,
+	     which disables analytics entirely. Read in AnalyticsService.swift. -->
+	<key>AmplitudeAPIKey</key>
+	<string>$(AMPLITUDE_API_KEY)</string>
 	<!-- Check hourly while running (3600 = Sparkle's minimum), not the 24h default — a Rounds
 	     window can stay open for months. SparkleUpdater also re-checks on wake/app-activation. -->
 	<key>SUScheduledCheckInterval</key>

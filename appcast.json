@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.7",
+  "latestVersion": "1.2.8",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.7/Rounds-1.2.7.dmg",
-  "notes": "Full Claude Code power: it can now actually create and edit files and run the shell, so it can build and save real documents and PDFs — no more silently blocked actions. Send a follow-up while a reply is still streaming: it queues (a grey chip you can delete) and sends automatically, in order, the moment the reply finishes. Right-click a chat tab to copy its title or the whole conversation. Auto-update now checks hourly and on wake, not only at launch. Onboarding: the Re-check button is visible without scrolling."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.8/Rounds-1.2.8.dmg",
+  "notes": "Enables anonymous product analytics (counts and feature events only — never your documents, names, or health data; off if you opted out). Plus everything from 1.2.7: full Claude Code power (it can create/edit files and run the shell to build real documents and PDFs), send a follow-up while a reply is streaming (it queues and sends in order), right-click a chat tab to copy its title or the whole conversation, and faster auto-update checks (hourly and on wake)."
 }

@@ -59,9 +59,13 @@ nonisolated enum AnalyticsEvent: Sendable {
 
 nonisolated enum Analytics {
 
-    /// Build-time key. EMPTY = analytics fully disabled (no network). The real release
-    /// injects a write-only ingestion key; the allowlist below is published in the repo.
-    static let apiKey = ""
+    /// Build-time key, injected into Info.plist (`AmplitudeAPIKey`) from the AMPLITUDE_API_KEY
+    /// build setting — never committed to the public repo. EMPTY = analytics fully disabled (no
+    /// network); the allowlist below stays published so the privacy guarantee is auditable.
+    static let apiKey: String = {
+        let v = (Bundle.main.object(forInfoDictionaryKey: "AmplitudeAPIKey") as? String) ?? ""
+        return v.contains("$(") ? "" : v.trimmingCharacters(in: .whitespacesAndNewlines)   // unexpanded placeholder → disabled
+    }()
     static let endpoint = URL(string: "https://api2.amplitude.com/2/httpapi")!
 
     private static let allowedEvents: Set<String> = [

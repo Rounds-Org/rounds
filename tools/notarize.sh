@@ -45,6 +45,10 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-rounds-notary}"
 
 VERSION="$(/usr/bin/sed -n 's/.*MARKETING_VERSION = \([0-9.]*\);.*/\1/p' "$ROOT/rounds.xcodeproj/project.pbxproj" | head -1)"
 
+# Local secrets (gitignored): provides AMPLITUDE_API_KEY so analytics is baked into the release
+# build only. Absent on a clean checkout → key stays empty → analytics disabled. Never committed.
+if [ -f "$ROOT/secrets/amplitude.env" ]; then set -a; . "$ROOT/secrets/amplitude.env"; set +a; fi
+
 # ── Preflight: Developer ID cert ────────────────────────────────────────────────────────
 if [ -z "${DEV_ID_APP:-}" ]; then
   DEV_ID_APP="$(security find-identity -v -p codesigning 2>/dev/null \
@@ -112,7 +116,9 @@ xcodebuild -project "$ROOT/rounds.xcodeproj" -scheme "$SCHEME" -configuration Re
   DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
+  AMPLITUDE_API_KEY="${AMPLITUDE_API_KEY:-}" \
   build >/dev/null
+[ -n "${AMPLITUDE_API_KEY:-}" ] && echo "==> Analytics: Amplitude key injected" || echo "==> Analytics: no key (disabled in this build)"
 
 APP="$DERIVED/Build/Products/Release/$SCHEME.app"
 [ -d "$APP" ] || { echo "✗ build produced no app" >&2; exit 1; }

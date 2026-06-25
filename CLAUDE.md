@@ -1,5 +1,9 @@
 # Rounds — Project Rules
 
+## Amplitude analytics key is injected at build time — never commit it
+
+The repo is PUBLIC. The Amplitude ingestion key must NOT live in any tracked file. It is injected at build time: `Info.plist` has `AmplitudeAPIKey = $(AMPLITUDE_API_KEY)`; `tools/notarize.sh` sources the gitignored `secrets/amplitude.env` (`AMPLITUDE_API_KEY=…`) and passes it as an xcodebuild build setting; `AnalyticsService.apiKey` reads `Bundle.main.object(forInfoDictionaryKey: "AmplitudeAPIKey")` and treats an empty value or an unexpanded `$(` placeholder as DISABLED. So a clean public-repo build (no `secrets/`) ships with analytics off. Do NOT hardcode the key in `AnalyticsService.swift`, `Info.plist`, or `notarize.sh`; do NOT remove the Info.plist key or the secrets-sourcing line (that silently disables analytics in releases). Keep the `sanitize()` allowlist chokepoint intact — only event-name + enum/numeric props ever leave, never content.
+
 ## Mid-stream sends queue — do NOT re-add an isStreaming send-guard
 
 Typing + Enter/click while a turn is streaming is allowed: the message is QUEUED (grey deletable chips in the input bar, `ChatRuntime.queued`) and auto-dispatched FIFO the instant the turn ends. Do NOT re-add `app.isStreaming`/`isStreaming` guards to the send path — there are TWO widgets that each had one (`MentionField.trySend` + its send-button `.disabled`, and `ChatView.send`); re-adding any of them silently makes the queue unreachable. `runQueue` owns `isStreaming` for the WHOLE drain (set true in `ChatRuntime.send` before the Task, reset only on NON-cancelled completion so a Stop→immediately-send can't be clobbered). `stop()` clears `queued`. The warm session is strictly one-turn-at-a-time (`runQueue` awaits each `runTurn` fully before the next), so never start a second `WarmSession.send` concurrently.

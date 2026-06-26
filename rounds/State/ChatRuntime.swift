@@ -201,6 +201,29 @@ final class ChatRuntime: Identifiable {
         }
     }
 
+    /// True when a turn's text is Claude Code's "not authenticated" failure rather than a real answer.
+    static func looksLikeClaudeAuthError(_ s: String) -> Bool {
+        let t = s.lowercased()
+        return t.contains("not logged in")
+            || t.contains("please run /login")
+            || (t.contains("/login") && t.contains("available in this environment"))   // apostrophe-proof
+            || t.contains("invalid api key")
+            || (t.contains("authentication") && t.contains("error"))
+    }
+
+    /// Shown in place of that failure: clear, correct steps. Sign-in must happen in a real terminal
+    /// because Rounds runs Claude Code non-interactively (no TTY / browser flow for /login).
+    static let claudeLoginGuidance = """
+    **Claude Code isn’t signed in yet.** Rounds runs Claude Code on your Mac, and it needs a one-time sign-in that has to be done in **Terminal** — Rounds can’t do it for you.
+
+    1. Open the **Terminal** app (press ⌘-Space, type “Terminal”, hit Return).
+    2. Type `claude` and press Return.
+    3. Complete the sign-in — a browser opens for your Claude account, or you can paste an Anthropic API key.
+    4. Come back to Rounds and send your message again.
+
+    Note: typing `/login` here won’t work — it only runs in a real terminal.
+    """
+
     private func runTurn(_ msg: String, _ references: [Reference]) async {
         messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date(), references: references))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)   // shows in Recent immediately
@@ -226,7 +249,14 @@ final class ChatRuntime: Identifiable {
 
         sessionId = warm?.sessionId ?? sid
         let answer = parsed.displayText.isEmpty ? liveText : parsed.displayText
-        let finalText = answer.isEmpty ? "I couldn't complete that just now. Please try again." : answer
+        var finalText = answer.isEmpty ? "I couldn't complete that just now. Please try again." : answer
+        // Claude Code is installed but not signed in → it returns "Not logged in · Please run /login"
+        // (and /login can't run here, non-interactively). Replace that cryptic output with clear,
+        // correct steps, and reflect the state so Settings/onboarding show the sign-in step too.
+        if Self.looksLikeClaudeAuthError(finalText) {
+            finalText = Self.claudeLoginGuidance
+            app.toolPaths.loggedIn = false
+        }
         messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date()))
         if !parsed.sources.isEmpty {
             sources = parsed.sources

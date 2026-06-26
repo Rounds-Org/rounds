@@ -185,7 +185,7 @@ final class AppState {
     var permissionMode: RoundsPermissionMode = .bypass   // how Claude Code asks before acting
     var showSettings = false
 
-    var checklistComplete: Bool { toolPaths.claudeInstalled && toolPaths.nodeInstalled && brainInstalled }
+    var checklistComplete: Bool { toolPaths.claudeInstalled && toolPaths.nodeInstalled && brainInstalled && !toolPaths.claudeNeedsLogin }
     var hasContent: Bool { !documents.isEmpty || !hypotheses.isEmpty }
 
     /// The language to write user-facing text in (a real language name, or a "match the user" hint).

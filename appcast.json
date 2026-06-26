@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.8",
+  "latestVersion": "1.2.9",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.8/Rounds-1.2.8.dmg",
-  "notes": "Enables anonymous product analytics (counts and feature events only — never your documents, names, or health data; off if you opted out). Plus everything from 1.2.7: full Claude Code power (it can create/edit files and run the shell to build real documents and PDFs), send a follow-up while a reply is streaming (it queues and sends in order), right-click a chat tab to copy its title or the whole conversation, and faster auto-update checks (hourly and on wake)."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.9/Rounds-1.2.9.dmg",
+  "notes": "Clearer help when Claude Code is installed but not signed in. Instead of a cryptic 'Not logged in · Please run /login', Rounds now explains exactly how to fix it: open Terminal, run claude, sign in, then come back. The setup screen also checks that you're signed in, not just that Claude Code is installed."
 }

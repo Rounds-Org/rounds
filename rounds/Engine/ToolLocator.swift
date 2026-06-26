@@ -14,9 +14,12 @@ nonisolated struct ToolPaths: Sendable {
     var node: String?
     var path: String
     var claudeVersion: String?   // e.g. "2.1.172"
+    var loggedIn: Bool?          // from `claude auth status` — nil = unknown / not probed / old CLI
 
     var claudeInstalled: Bool { claude != nil }
     var nodeInstalled: Bool { node != nil }
+    /// Installed but explicitly NOT signed in — the "Not logged in · Please run /login" failure.
+    var claudeNeedsLogin: Bool { claudeInstalled && loggedIn == false }
 
     /// PreToolUse hooks that return a permission decision (so Rounds can show Allow/Deny dialogs and
     /// unlock the full Claude Code toolset) need a recent enough Claude Code. Below this → safe mode.
@@ -83,15 +86,21 @@ nonisolated enum ToolLocator {
         path = parts.joined(separator: ":")
 
         var version: String?
+        var loggedIn: Bool?
         if let claude {
             let out = await runLoginShell("\"\(claude)\" --version 2>/dev/null")
             // e.g. "2.1.172 (Claude Code)"
             if let m = out.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) {
                 version = String(out[m])
             }
+            // Cheap, model-free auth probe: `claude auth status --json` → {"loggedIn": true/false,…}.
+            // Only commit to true/false when the JSON says so; anything else stays nil (don't alarm).
+            let auth = await runLoginShell("\"\(claude)\" auth status --json 2>/dev/null")
+            if auth.range(of: #""loggedIn"\s*:\s*true"#, options: .regularExpression) != nil { loggedIn = true }
+            else if auth.range(of: #""loggedIn"\s*:\s*false"#, options: .regularExpression) != nil { loggedIn = false }
         }
 
-        return ToolPaths(claude: claude, node: node, path: path, claudeVersion: version)
+        return ToolPaths(claude: claude, node: node, path: path, claudeVersion: version, loggedIn: loggedIn)
     }
 
     static func runLoginShell(_ script: String) async -> String {

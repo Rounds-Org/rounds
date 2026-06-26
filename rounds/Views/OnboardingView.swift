@@ -201,6 +201,12 @@ struct OnboardingView: View {
                 ChecklistRow(done: app.toolPaths.claudeInstalled, title: "Claude Code",
                              detail: app.toolPaths.claude ?? "Not found — install from claude.com/code",
                              link: app.toolPaths.claudeInstalled ? nil : "https://claude.com/code")
+                // Installed ≠ signed in. Shown only when we have a definite answer from `claude auth status`.
+                if app.toolPaths.claudeInstalled, let signedIn = app.toolPaths.loggedIn {
+                    ChecklistRow(done: signedIn, title: "Signed in to Claude Code",
+                                 detail: signedIn ? "Signed in"
+                                    : "Not signed in — open Terminal, run “claude”, sign in, then press Re-check")
+                }
                 ChecklistRow(done: app.toolPaths.nodeInstalled, title: "Node.js",
                              detail: app.toolPaths.node ?? "Not found — install from nodejs.org",
                              link: app.toolPaths.nodeInstalled ? nil : "https://nodejs.org")

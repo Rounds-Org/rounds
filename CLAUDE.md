@@ -153,6 +153,13 @@ Do NOT use a fixed-duration turn timeout (e.g. 300 s) — it kills legitimate lo
 The Amplitude ingestion key is NEVER committed. Store it in `secrets/amplitude.env` (gitignored) as `AMPLITUDE_API_KEY=<key>`. `tools/notarize.sh` sources that file and passes the key to xcodebuild; `Info.plist` holds `$(AMPLITUDE_API_KEY)` which resolves at build time. `AnalyticsService.swift` reads `AmplitudeAPIKey` from `Bundle.main` and treats an empty value or unexpanded `$(` placeholder as "analytics disabled — no network calls". A clean checkout with no `secrets/` file silently disables analytics, which is correct for open-source builds.
 <!-- auto-added 2026-06-25 -->
 
+## Claude Code sign-in requires a real Terminal — `/login` is a no-op inside Rounds
+
+Rounds spawns Claude Code non-interactively (no TTY, no browser flow). `/login` silently does nothing here. Users must sign in once in **Terminal** (`claude` → follow prompts) before Rounds can use Claude Code.
+Auth is probed at startup via `claude auth status --json` → `ToolPaths.loggedIn`; `claudeNeedsLogin` (installed but `loggedIn == false`) blocks `checklistComplete` and shows a sign-in row in onboarding.
+`ChatRuntime.looksLikeClaudeAuthError()` intercepts the "Not logged in · Please run /login" output and replaces it with clear Terminal-based instructions. Do NOT remove this interception or add `/login` as a chat command.
+<!-- auto-added 2026-06-25 -->
+
 ## Slash commands all pass through to Claude Code
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.

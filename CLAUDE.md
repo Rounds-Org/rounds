@@ -58,6 +58,11 @@ After `.scaleEffect(s, anchor: .topLeading)` you MUST add a second `.frame(width
 Use `.draggable(item.id)` + `.dropDestination(for: String.self)` (NOT `onDrag`/`onDrop`/`DropDelegate`) for tab reordering. The `DropDelegate` approach silently breaks on macOS and produces no movement.
 <!-- auto-added 2026-06-21 -->
 
+## Nested drop zones flicker: debounce the overlay OFF transition
+
+When an outer `onDrop` and inner drop zones each have an `isTargeted` binding, the drag hand-off between them momentarily reports "no target", causing the overlay to flicker. Drive overlay visibility from a latched `showDropZones` bool: set it immediately when ANY `isTargeted` turns true, and clear it only after a ~180 ms `DispatchWorkItem` debounce (cancel on re-entry). Do NOT drive overlay visibility from `dropTargeted` alone when multiple zones share the drag.
+<!-- auto-added 2026-06-26 -->
+
 ## Claude Code must run unrestricted (full power = true bypass, no gating)
 
 In **Full Power** mode (the default, `fullPowerActive`), chat runs Claude Code FULLY UNRESTRICTED — exactly like the VS Code extension in bypass mode. There is NO per-action approval dialog and NO hard-deny list. Concretely:

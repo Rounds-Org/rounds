@@ -15,6 +15,11 @@ struct ContentView: View {
     @State private var dropTargeted = false
     @State private var leftTargeted = false    // "add to this chat" drop zone
     @State private var rightTargeted = false   // "process generally" drop zone
+    // Latched visibility: with two zones, the outer target and a zone hand the drag back and forth,
+    // so `dropTargeted` alone flickers. Show while ANY target has the drag, and hide only after a
+    // short debounce so the hand-off gap never collapses (and re-shows) the overlay.
+    @State private var showDropZones = false
+    @State private var dragHideWork: DispatchWorkItem?
 
     private var showSources: Bool {
         app.activeChatTab != nil && (!app.currentSources.isEmpty || app.sourcesWarning != nil)
@@ -53,12 +58,32 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             handleDrop(providers, toChat: false); return true
         }
+        .onChange(of: dropTargeted) { _, _ in recomputeDragOverlay() }
+        .onChange(of: leftTargeted) { _, _ in recomputeDragOverlay() }
+        .onChange(of: rightTargeted) { _, _ in recomputeDragOverlay() }
+    }
+
+    /// Drive `showDropZones` from the combined targeting state, debouncing the OFF transition so the
+    /// outer↔zone hand-off (which momentarily reports "no target") can't flicker the overlay.
+    private func recomputeDragOverlay() {
+        let any = dropTargeted || leftTargeted || rightTargeted
+        if any {
+            dragHideWork?.cancel(); dragHideWork = nil
+            if !showDropZones { showDropZones = true }
+        } else if showDropZones, dragHideWork == nil {
+            let work = DispatchWorkItem {
+                if !(dropTargeted || leftTargeted || rightTargeted) { showDropZones = false }
+                dragHideWork = nil
+            }
+            dragHideWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+        }
     }
 
     /// While dragging a file: if a chat is open, offer TWO zones — left = attach to the open chat,
     /// right = process generally (today's behavior). Otherwise the single general overlay.
     @ViewBuilder private var dropOverlay: some View {
-        if dropTargeted && app.booted {
+        if showDropZones && app.booted {
             if app.activeChatTab != nil {
                 HStack(spacing: 0) {
                     DropZone(icon: "bubble.left.fill", title: "Add to this chat",

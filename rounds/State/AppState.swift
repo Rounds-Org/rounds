@@ -383,6 +383,52 @@ final class AppState {
         importDocuments(Self.expandToFiles(urls))   // each drag-batch gets its own chat
     }
 
+    // MARK: - Attach files to a SPECIFIC chat (lighter than the full intake/filing flow)
+
+    /// Copy a file into the vault under this chat and return its vault-relative path — so the model
+    /// can Read it (cwd = vault root) and Rounds can show/open it. De-dups the filename. nil on error.
+    func stageChatAttachment(_ url: URL, chatId: String) -> String? {
+        let dir = vault.chatsDir.appendingPathComponent("attachments/\(chatId)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var dest = dir.appendingPathComponent(url.lastPathComponent)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            let base = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
+            var n = 2
+            repeat {
+                dest = dir.appendingPathComponent(ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)")
+                n += 1
+            } while FileManager.default.fileExists(atPath: dest.path)
+        }
+        do { try FileManager.default.copyItem(at: url, to: dest) }
+        catch { toast = "Couldn't attach \(url.lastPathComponent)"; return nil }
+        let prefix = vault.root.path.hasSuffix("/") ? vault.root.path : vault.root.path + "/"
+        return dest.path.hasPrefix(prefix) ? String(dest.path.dropFirst(prefix.count)) : dest.path
+    }
+
+    /// Attach file URL(s) to a specific chat: stage each into the vault and add a file reference to
+    /// that chat's draft (it rides along with the next message and renders as a thumbnail/image).
+    func attachFilesToChat(_ urls: [URL], chatId: String) {
+        let rt = runtime(chatId)
+        var added = 0
+        for url in Self.expandToFiles(urls) {
+            guard let rel = stageChatAttachment(url, chatId: chatId) else { continue }
+            let ref = Reference(kind: .file, id: rel, label: url.lastPathComponent)
+            if !rt.draftReferences.contains(ref) { rt.draftReferences.append(ref); added += 1 }
+        }
+        if added > 0 {
+            selectTab(.chat(chatId))
+            Analytics.track(.documentAdded(isImaging: false))
+            toast = added == 1 ? "Attached to this chat" : "Attached \(added) files to this chat"
+        }
+    }
+
+    /// Absolute on-disk URL for a file reference (vault-relative or absolute path), if it still exists.
+    func referenceFileURL(_ ref: Reference) -> URL? {
+        guard ref.kind == .file else { return nil }
+        let abs = ref.id.hasPrefix("/") ? URL(fileURLWithPath: ref.id) : vault.root.appendingPathComponent(ref.id)
+        return FileManager.default.fileExists(atPath: abs.path) ? abs : nil
+    }
+
     /// File types intake can read (documents + images). Used to filter folder contents on import.
     static let importableExtensions: Set<String> = [
         "pdf", "png", "jpg", "jpeg", "heic", "heif", "tiff", "tif", "gif", "bmp", "webp",
@@ -630,7 +676,16 @@ final class AppState {
         var md = "---\ntitle: \"\(title.replacingOccurrences(of: "\"", with: "'"))\"\nsessionId: \(sessionId ?? "")\n---\n\n"
         // Sentinel delimiter (an HTML comment) so an assistant message containing a markdown
         // "## heading" can't be mistaken for a message boundary and truncated on reload.
-        for m in msgs { md += "<!-- rounds:msg role=\(m.role.rawValue) -->\n\n\(m.text)\n\n" }
+        for m in msgs {
+            // Sentinel: <!-- rounds:msg role=<role> [refs=<base64 json>] --> — so attachments
+            // (file references) survive close/reopen instead of vanishing from the transcript.
+            var sentinel = "<!-- rounds:msg role=\(m.role.rawValue)"
+            if !m.references.isEmpty, let data = try? JSONEncoder().encode(m.references) {
+                sentinel += " refs=\(data.base64EncodedString())"
+            }
+            sentinel += " -->"
+            md += "\(sentinel)\n\n\(m.text)\n\n"
+        }
         let url = vault.chatsDir.appendingPathComponent("\(chatId).md")
         try? FileManager.default.createDirectory(at: vault.chatsDir, withIntermediateDirectories: true)
         try? md.data(using: .utf8)?.write(to: url)
@@ -645,20 +700,31 @@ final class AppState {
         guard let s = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         var msgs: [ChatMessage] = []
         var role: ChatRole?
+        var pendingRefs: [Reference] = []
         var buf = ""
         func flush() {
             if let r = role, !buf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                msgs.append(ChatMessage(id: UUID().uuidString, role: r, text: buf.trimmingCharacters(in: .whitespacesAndNewlines), timestamp: Date()))
+                msgs.append(ChatMessage(id: UUID().uuidString, role: r, text: buf.trimmingCharacters(in: .whitespacesAndNewlines), timestamp: Date(), references: pendingRefs))
             }
             buf = ""
+            pendingRefs = []
         }
         for raw in s.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             if line.hasPrefix("<!-- rounds:msg role=") {
                 flush()
-                let r = line.replacingOccurrences(of: "<!-- rounds:msg role=", with: "")
+                // <!-- rounds:msg role=<role> [refs=<base64 json>] -->
+                let inner = line.replacingOccurrences(of: "<!-- rounds:msg role=", with: "")
                     .replacingOccurrences(of: "-->", with: "").trimmingCharacters(in: .whitespaces)
-                role = ChatRole(rawValue: r)
+                let parts = inner.split(separator: " ", maxSplits: 1)
+                role = ChatRole(rawValue: String(parts.first ?? ""))
+                if parts.count > 1 {
+                    let token = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                    if token.hasPrefix("refs="), let data = Data(base64Encoded: String(token.dropFirst(5))),
+                       let decoded = try? JSONDecoder().decode([Reference].self, from: data) {
+                        pendingRefs = decoded
+                    }
+                }
             } else if line == "## user" || line == "## assistant" || line == "## system" {
                 // Legacy delimiter (files written before the sentinel): ONLY a bare role line is a
                 // boundary — an in-body "## Heading" is kept as body, so long messages aren't truncated.

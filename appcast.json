@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.2.9",
+  "latestVersion": "1.3.0",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.2.9/Rounds-1.2.9.dmg",
-  "notes": "Clearer help when Claude Code is installed but not signed in. Instead of a cryptic 'Not logged in · Please run /login', Rounds now explains exactly how to fix it: open Terminal, run claude, sign in, then come back. The setup screen also checks that you're signed in, not just that Claude Code is installed."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.3.0/Rounds-1.3.0.dmg",
+  "notes": "Attach files straight to a chat. Drag a file onto the window and you'll see two drop zones — drop on the LEFT to attach it to the open chat, or on the RIGHT to file it into Rounds as before. Inside a chat, the new paperclip lets you attach a document (to this chat, or to Rounds). Attachments show inline — images as small previews, other files as thumbnails — and a click opens them in the native Preview app."
 }

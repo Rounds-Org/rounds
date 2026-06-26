@@ -52,18 +52,12 @@ struct ChatView: View {
             VStack(alignment: .leading, spacing: 6) {
                 if !rt.draftReferences.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
+                        HStack(alignment: .bottom, spacing: 8) {
                             ForEach(rt.draftReferences) { ref in
-                                HStack(spacing: 4) {
-                                    Image(systemName: ref.iconName).zfont(.caption2)
-                                    Text(ref.label).zfont(.caption2).lineLimit(1)
-                                    Button { rt.draftReferences.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
-                                        .buttonStyle(.borderless)
-                                }
-                                .padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
+                                RefAttachment(ref: ref, compact: true) { rt.draftReferences.removeAll { $0 == ref } }
                             }
                         }
+                        .padding(.top, 6).padding(.trailing, 6)
                     }
                 }
                 if !rt.queued.isEmpty {
@@ -87,7 +81,11 @@ struct ChatView: View {
                 MentionField(text: draftBinding(rt), references: refsBinding(rt),
                              placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
                              onSend: send, autofocus: true)
-                InputControls()
+                HStack(spacing: 10) {
+                    InputControls()
+                    Spacer()
+                    attachMenu
+                }
             }
             .padding(12)
             .background(Theme.panel)
@@ -103,6 +101,31 @@ struct ChatView: View {
         rt.draft = ""
         rt.draftReferences = []
         app.beginSendChat(text, references: refs)
+    }
+
+    // Paperclip: first choose the destination (this chat vs. Rounds' general filing), then pick files.
+    private var attachMenu: some View {
+        Menu {
+            Button { pickAndAttach(toChat: true) } label: { Label("Add to this chat", systemImage: "bubble.left") }
+            Button { pickAndAttach(toChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
+        } label: {
+            Image(systemName: "paperclip").zfont(.body).foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Attach a document — to this chat, or to Rounds for filing")
+    }
+
+    private func pickAndAttach(toChat: Bool) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Attach"
+        panel.message = toChat ? "Add document(s) to this chat" : "Add document(s) to Rounds"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        if toChat, let cid = app.activeChatTab { app.attachFilesToChat(panel.urls, chatId: cid) }
+        else { app.beginImport(panel.urls) }
     }
 
     private var header: some View {
@@ -247,15 +270,8 @@ struct MessageRow: View {
                 Spacer(minLength: 60)
                 VStack(alignment: .trailing, spacing: 3) {
                     if !message.references.isEmpty {
-                        HStack(spacing: 5) {
-                            ForEach(message.references) { ref in
-                                HStack(spacing: 4) {
-                                    Image(systemName: ref.iconName).zfont(size: 9)
-                                    Text(ref.label).zfont(.caption2).lineLimit(1)
-                                }
-                                .padding(.horizontal, 7).padding(.vertical, 2)
-                                .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
-                            }
+                        VStack(alignment: .trailing, spacing: 5) {
+                            ForEach(message.references) { ref in RefAttachment(ref: ref) }
                         }
                     }
                     if !message.text.isEmpty {

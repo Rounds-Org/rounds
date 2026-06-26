@@ -131,6 +131,7 @@ OBSOLETE design note (kept for context): full power used to route `Write|Edit|Mu
 ## Chat file message delimiters
 
 Chat `.md` files use `<!-- rounds:msg role=<role> -->` HTML comment sentinels as message boundaries (written by `persistChat`, parsed by `loadChat`). Do NOT revert to `## role` headers — an assistant response containing a `## Heading` would be parsed as a role boundary and silently truncate the message on reload. Legacy files with `## role` are still parsed (bare role lines only, not in-body headings).
+The sentinel also carries a message's attachments: `<!-- rounds:msg role=<role> refs=<base64-json of [Reference]> -->`. `persistChat` writes `refs=` when a message has references and `loadTranscript` decodes them back into `ChatMessage.references` — do NOT drop this, or file attachments (the thumbnails/inline images in the transcript) vanish on close/reopen even though the files survive in `chats/attachments/<chatId>/`. base64 has no spaces, so the role/refs split (`split(separator:" ", maxSplits:1)`) stays unambiguous.
 <!-- auto-added 2026-06-23 -->
 
 ## Chat input: native NSTextView required

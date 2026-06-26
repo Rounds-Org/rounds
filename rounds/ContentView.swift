@@ -13,6 +13,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Environment(AppState.self) private var app
     @State private var dropTargeted = false
+    @State private var leftTargeted = false    // "add to this chat" drop zone
+    @State private var rightTargeted = false   // "process generally" drop zone
 
     private var showSources: Bool {
         app.activeChatTab != nil && (!app.currentSources.isEmpty || app.sourcesWarning != nil)
@@ -31,7 +33,7 @@ struct ContentView: View {
         Group {
             if app.booted { mainView } else { BootSkeleton() }
         }
-        .overlay { if dropTargeted && app.booted { DropOverlay() } }
+        .overlay { dropOverlay }
         .overlay(alignment: .bottom) { ToastBanner() }
         .sheet(isPresented: Binding(get: { app.showOnboarding }, set: { app.showOnboarding = $0 })) {
             OnboardingView()
@@ -45,8 +47,31 @@ struct ContentView: View {
         .sheet(item: Binding(get: { app.pendingPermission }, set: { if $0 == nil, let p = app.pendingPermission { app.respondPermission(p, allow: false, always: false) } })) { pp in
             PermissionDialog(request: pp).interactiveDismissDisabled()
         }
+        // The whole window detects a file drag (drives the overlay). When a chat is open the overlay
+        // splits into two zones with their own onDrop; this outer one is the fallback (no chat open,
+        // or a drop before the overlay's halves registered) → today's general filing.
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
-            handleDrop(providers); return true
+            handleDrop(providers, toChat: false); return true
+        }
+    }
+
+    /// While dragging a file: if a chat is open, offer TWO zones — left = attach to the open chat,
+    /// right = process generally (today's behavior). Otherwise the single general overlay.
+    @ViewBuilder private var dropOverlay: some View {
+        if dropTargeted && app.booted {
+            if app.activeChatTab != nil {
+                HStack(spacing: 0) {
+                    DropZone(icon: "bubble.left.fill", title: "Add to this chat",
+                             subtitle: "Attach to the open conversation", active: leftTargeted)
+                        .onDrop(of: [.fileURL], isTargeted: $leftTargeted) { handleDrop($0, toChat: true); return true }
+                    DropZone(icon: "tray.and.arrow.down.fill", title: "Add to Rounds",
+                             subtitle: "Read on-device and file it", active: rightTargeted)
+                        .onDrop(of: [.fileURL], isTargeted: $rightTargeted) { handleDrop($0, toChat: false); return true }
+                }
+                .ignoresSafeArea()
+            } else {
+                DropOverlay()
+            }
         }
     }
 
@@ -93,17 +118,50 @@ struct ContentView: View {
         .background(Theme.bg)
     }
 
-    private func handleDrop(_ providers: [NSItemProvider]) {
+    private func handleDrop(_ providers: [NSItemProvider], toChat: Bool) {
         var urls: [URL] = []
+        let lock = NSLock()   // loadObject callbacks fire on arbitrary queues concurrently
         let group = DispatchGroup()
         for provider in providers {
             group.enter()
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { urls.append(url) }
+                if let url { lock.lock(); urls.append(url); lock.unlock() }
                 group.leave()
             }
         }
-        group.notify(queue: .main) { if !urls.isEmpty { app.beginImport(urls) } }
+        group.notify(queue: .main) {
+            guard !urls.isEmpty else { return }
+            if toChat, let cid = app.activeChatTab { app.attachFilesToChat(urls, chatId: cid) }
+            else { app.beginImport(urls) }
+        }
+    }
+}
+
+/// One half of the two-zone drag overlay.
+private struct DropZone: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let active: Bool
+    var body: some View {
+        ZStack {
+            Theme.accent.opacity(active ? 0.18 : 0.06)
+            VStack(spacing: 10) {
+                Image(systemName: icon).zfont(size: 38).foregroundStyle(Theme.accent)
+                Text(title).zfont(.title3, .semibold).multilineTextAlignment(.center)
+                Text(subtitle).zfont(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            .padding(22)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(Theme.accent.opacity(active ? 1 : 0.5),
+                              style: StrokeStyle(lineWidth: active ? 3 : 2, dash: [8])))
+            .scaleEffect(active ? 1.03 : 1)
+            .padding(18)
+            .animation(.easeOut(duration: 0.12), value: active)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
     }
 }
 

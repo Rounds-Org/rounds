@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.4.0",
+  "latestVersion": "1.4.1",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.0/Rounds-1.4.0.dmg",
-  "notes": "Voice input. A new microphone in the chat input lets you dictate messages — it transcribes with OpenAI Whisper using your own API key (you enter it once; it's kept only in your Mac's Keychain). Record with a live waveform, press stop to transcribe, and the text drops in at your cursor. Cancel anytime during recording, and retry a failed transcription without speaking again."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.1/Rounds-1.4.1.dmg",
+  "notes": "Sharper clinical reasoning in chat: it holds one evolving differential instead of swinging the likely cause to your latest message, checks a diagnosis's hallmarks before building on it (no pushing sleep apnea without its signs, no weight-loss advice at a normal BMI), prefers the simplest explanation first, and asks a few key questions rather than one every turn. The home box now recognizes symptoms written in Russian and Ukrainian (not just English), so they start the structured intake and red-flag check. Also fixed the voice recording bar overlapping its cancel button."
 }

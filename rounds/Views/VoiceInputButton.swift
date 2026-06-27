@@ -128,11 +128,12 @@ struct VoiceInputButton: View {
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help("Cancel")
             PulsingRecDot()
             HStack(spacing: 2) {
-                ForEach(Array(c.meter.suffix(20).enumerated()), id: \.offset) { _, v in
-                    Capsule().fill(Theme.accent).frame(width: 2.5, height: max(3, v * 18))
+                ForEach(Array(c.meter.suffix(11).enumerated()), id: \.offset) { _, v in
+                    Capsule().fill(Theme.accent).frame(width: 2.5, height: max(3, min(18, v * 18)))
                 }
             }
-            .frame(width: 52, height: 20, alignment: .trailing)
+            .frame(width: 48, height: 20, alignment: .trailing)
+            .clipped()
             Text(timeString(c.elapsed)).zfont(.caption2).monospacedDigit().foregroundStyle(.secondary)
             Button { c.stopAndTranscribe() } label: { Image(systemName: "stop.circle.fill").zfont(.title3) }
                 .buttonStyle(.borderless).foregroundStyle(.red).help("Stop & transcribe")

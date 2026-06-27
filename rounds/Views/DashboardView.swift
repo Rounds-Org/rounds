@@ -137,7 +137,7 @@ struct DashboardView: View {
                   done: app.hypotheses.contains { $0.isQuestion && !($0.answer?.isEmpty ?? true) }),
             .init(icon: "stethoscope", title: "Describe a symptom",
                   detail: "Type how you feel — Rounds takes a history and proposes a workup.",
-                  done: !app.complaints.isEmpty),
+                  done: !app.complaints.isEmpty || app.chats.contains { app.looksLikeSymptom($0.title) }),
             .init(icon: "person.2.fill", title: "Add a family member",
                   detail: "Keep records for parents, partner, kids — Rounds spots risks across the family (with their OK 🙂).",
                   done: app.people.contains { $0.slug != "_self" }),

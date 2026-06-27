@@ -682,7 +682,20 @@ final class AppState {
         from sources you retrieve THIS turn via the rounds-sources tools; put an inline [S#] \
         on every clinically meaningful sentence; cite the user's own values as "your record"; \
         propose, never prescribe; and emit a rounds.sources JSON block (and rounds.alert if a \
-        value is critical). If the user wants a reversible change to a next-step card they \
+        value is critical).
+        Run this as ONE ongoing case, like a senior clinician — not a fresh Q&A. Hold a single \
+        evolving differential and integrate this new detail by RE-WEIGHTING it; do NOT pivot 180° to \
+        whatever the latest message mentions or rebuild the diagnosis from scratch each turn (that \
+        whiplash is the #1 failure here). Before elevating a condition, check its hallmarks against \
+        THIS patient and down-rank ones they don't fit (don't work up sleep apnoea when there's no \
+        snoring/witnessed pauses/daytime sleepiness; never suggest weight loss at a normal BMI), and \
+        don't quietly reintroduce a branch you already ruled out. \
+        Prefer the simplest sufficient explanation and match workup intensity to the real risk (no \
+        sleep studies / referrals / surgery before the simple reversible cause is tested). Reason on \
+        your own first and ask only the 1–3 highest-yield questions that would actually change the \
+        plan — batched, not one every turn. Be concise and decisive; tailor every step to their own \
+        data; converge on the likely cause + the ONE reversible experiment that confirms or refutes it.
+        If the user wants a reversible change to a next-step card they \
         referenced (translate it to their language, mark it done/not-relevant, snooze, reactivate), \
         just do it: emit `{ "rounds.step_action": { "id": "<step id>", "action": "relanguage|done|dismiss|snooze|activate" } }` \
         and confirm in ONE short sentence — no permission menu, never claim you'll edit a file yourself.
@@ -1240,8 +1253,12 @@ final class AppState {
     /// A conservative heuristic: does this free text read like a symptom (-> open a Complaint) vs a
     /// question/navigation (-> chat)? Requires a symptom word, so "what is ferritin?" stays a chat.
     func looksLikeSymptom(_ text: String) -> Bool {
-        let pattern = "pain|ache|aching|hurt|sore|dizz|nause|fatigue|exhaust|rash|swollen|swelling|cramp|headache|migraine|fever|cough|short of breath|breathless|numb|tingl|stiff|bleed|vomit|diarrh|constipat|insomnia|can'?t sleep|burning|itch|palpitation|throbbing|spasm|weakness|bloat|reflux|heartburn|discharge|\\blump\\b"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+        // Multilingual: the home box must recognise a symptom in the user's OWN language, or it
+        // silently routes it to plain chat instead of the structured intake + red-flag check.
+        let en = "pain|ache|aching|hurt|sore|dizz|nause|fatigue|exhaust|rash|swollen|swelling|cramp|headache|migraine|fever|cough|short of breath|breathless|numb|tingl|stiff|bleed|vomit|diarrh|constipat|insomnia|can'?t sleep|burning|itch|palpitation|throbbing|spasm|weakness|bloat|reflux|heartburn|discharge|\\blump\\b|dry|drie|drying"
+        let ru = "болит|болят|болел|болею|боль\\b|боли\\b|больно|ноет|ноющ|режет|колет|жжёт|жжет|жжени|печёт|печет|горло|горле|глотк|головокруж|кружит голов|тошн|рвот|температур|лихорад|озноб|кашл|кашель|насморк|заложен|сыпь|зуд|чеш|отёк|отек|опух|припух|судорог|спазм|слабост|устал|утомл|разбит|бессонниц|не сплю|плохо сплю|не могу спать|изжог|рефлюкс|отрыжк|вздут|кровот|кровит|понос|диаре|запор|онемен|покалыв|мурашк|одышк|задых|тяжело дышать|сух|пересых|высыха|сохнет|пересох|давит|сдавл|стеснени|потлив|мигрен"
+        let uk = "болить|нудот|запаморочен|висип|свербіж|свербить|набряк|задишк|кровотеч|сухіст|пересиха"
+        guard let re = try? NSRegularExpression(pattern: "\(en)|\(ru)|\(uk)", options: [.caseInsensitive]) else { return false }
         let ns = text as NSString
         return re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) != nil
     }

@@ -17,6 +17,7 @@ struct MentionField: View {
     var placeholder: String
     var onSend: () -> Void
     var autofocus: Bool = false
+    var onRegisterTextView: ((ChatKeyTextView?) -> Void)? = nil   // for voice insert at caret
 
     @State private var mentionQuery: String?
     @State private var slashQuery: String?
@@ -41,7 +42,8 @@ struct MentionField: View {
             if slashMenuOpen { slashMenu }
             HStack(alignment: .bottom, spacing: 10) {
                 ChatInputEditor(text: $text, height: $editorHeight, placeholder: placeholder, autofocus: autofocus,
-                                onEnter: handleEnter, onArrow: handleArrow, onEscape: handleEscape)
+                                onEnter: handleEnter, onArrow: handleArrow, onEscape: handleEscape,
+                                onRegisterTextView: onRegisterTextView)
                     .frame(maxWidth: .infinity)
                     .frame(height: editorHeight)
                     .onChange(of: text) { _, new in updateTriggers(new) }

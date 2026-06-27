@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime is on (ENABLE_HARDENED_RUNTIME = YES) and App Sandbox is off, so microphone
+	     access for voice input needs this entitlement; without it the OS denies the mic even after
+	     a TCC grant. Do NOT add get-task-allow here (it would fail notarization). -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

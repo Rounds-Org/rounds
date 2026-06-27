@@ -46,6 +46,9 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { app.showSettings }, set: { app.showSettings = $0 })) {
             SettingsView()
         }
+        .sheet(isPresented: Binding(get: { app.showOpenAIKeySheet }, set: { app.showOpenAIKeySheet = $0 })) {
+            OpenAIKeySheet()
+        }
         .sheet(item: Binding(get: { app.intake.map { IntakeBox($0) } }, set: { if $0 == nil { app.cancelIntake() } })) { box in
             IntakeSheet(state: box.value).id(box.id)   // fresh fields per grouped question
         }

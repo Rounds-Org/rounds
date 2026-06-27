@@ -135,11 +135,16 @@ if [ -d "$APP/Contents/Frameworks/Sparkle.framework" ]; then
     "$SPV/XPCServices/Installer.xpc" \
     "$SPV/Updater.app" \
     "$SPV/Autoupdate" \
-    "$APP/Contents/Frameworks/Sparkle.framework" \
-    "$APP" ; do
+    "$APP/Contents/Frameworks/Sparkle.framework" ; do
     codesign --force --options runtime --timestamp --sign "$DEV_ID_APP" "$item"
   done
 fi
+
+# Re-seal the main app LAST (after the nested re-signs) WITH our entitlements — a bare
+# `codesign --sign` would strip them, and the microphone entitlement (rounds.entitlements) must
+# survive or voice input is denied at runtime under the hardened runtime.
+echo "==> Re-sealing the app (Developer ID + hardened runtime + entitlements)"
+codesign --force --options runtime --timestamp --entitlements "$ROOT/rounds.entitlements" --sign "$DEV_ID_APP" "$APP"
 
 # Verify the signature is Developer ID + hardened runtime before we spend a notarization.
 # Capture codesign output to a var first: `codesign | grep -q` under `set -o pipefail`

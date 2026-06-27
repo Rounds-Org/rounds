@@ -20,5 +20,8 @@
 	     window can stay open for months. SparkleUpdater also re-checks on wake/app-activation. -->
 	<key>SUScheduledCheckInterval</key>
 	<integer>3600</integer>
+	<!-- Voice input (mic → OpenAI Whisper). Shown in the macOS microphone-permission prompt. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Rounds records your voice so it can transcribe it into the chat input using OpenAI Whisper (with your own API key).</string>
 </dict>
 </plist>

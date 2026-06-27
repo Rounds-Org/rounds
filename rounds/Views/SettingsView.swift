@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var showContract = false
     @State private var confirmWipe = false
     @State private var wiping = false
+    @State private var showKeySheet = false
+    @State private var hasVoiceKey = KeychainStore.get(KeychainStore.openAIKey) != nil
 
     private let languages = ["Auto (match the user)", "English", "Russian", "Spanish", "German",
                              "French", "Portuguese", "Ukrainian", "Hindi", "Chinese (Simplified)"]
@@ -135,6 +137,21 @@ struct SettingsView: View {
                         .toggleStyle(.switch).tint(Theme.accent)
                     }
 
+                    section("Voice input") {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "mic").foregroundStyle(Theme.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("OpenAI Whisper key").zfont(.callout)
+                                Text(hasVoiceKey
+                                     ? "A key is saved in your Keychain. The mic in chat dictates with Whisper."
+                                     : "Add your own OpenAI key to dictate messages with the mic in chat.")
+                                    .zfont(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Button(hasVoiceKey ? "Change…" : "Add key…") { showKeySheet = true }
+                        }
+                    }
+
                     section("Safety contract") {
                         Text("The system prompt Rounds always enforces. It's read-only — your custom instructions are added on top.")
                             .zfont(.caption).foregroundStyle(.secondary)
@@ -192,6 +209,7 @@ struct SettingsView: View {
         .frame(width: 560, height: 620)
         .background(Theme.bg)
         .onAppear { language = app.language; custom = app.customInstructions; selfContext = app.selfContextText; permissionMode = app.permissionMode }
+        .sheet(isPresented: $showKeySheet, onDismiss: { hasVoiceKey = KeychainStore.get(KeychainStore.openAIKey) != nil }) { OpenAIKeySheet() }
         .confirmationDialog("Delete all Rounds data?", isPresented: $confirmWipe, titleVisibility: .visible) {
             Button("Delete everything", role: .destructive) {
                 wiping = true

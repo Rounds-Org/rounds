@@ -41,6 +41,7 @@ final class ChatRuntime: Identifiable {
     var draft = ""                    // unsent input text — kept per-chat so it survives leaving/returning to the tab
     var draftReferences: [Reference] = []   // unsent @-references, likewise preserved across tab switches
     var queued: [QueuedTurn] = []     // messages typed mid-stream: grey deletable chips, sent in order once the turn ends
+    @ObservationIgnored weak var inputTextView: ChatKeyTextView?   // live editor, for inserting voice dictation at the caret
     private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
 
     private var warm: WarmSession?

@@ -20,6 +20,7 @@ struct ChatInputEditor: NSViewRepresentable {
     var onEnter: () -> Bool       // Enter without Shift: return true if consumed (send / pick a menu item)
     var onArrow: (Bool) -> Bool   // up == true / down == false: true if consumed (menu navigation)
     var onEscape: () -> Bool      // true if consumed (close a menu)
+    var onRegisterTextView: ((ChatKeyTextView?) -> Void)? = nil   // hand the live text view to the owner (voice insert)
 
     let minHeight: CGFloat = 24
     let maxHeight: CGFloat = 132
@@ -50,6 +51,7 @@ struct ChatInputEditor: NSViewRepresentable {
         scroll.autohidesScrollers = true
 
         context.coordinator.textView = tv
+        onRegisterTextView?(tv)
         DispatchQueue.main.async {
             context.coordinator.recomputeHeight()
             if autofocus {
@@ -99,6 +101,17 @@ final class ChatKeyTextView: NSTextView {
     var onArrow: ((Bool) -> Bool)?
     var onEscape: (() -> Bool)?
     var placeholderString = "" { didSet { needsDisplay = true } }
+
+    /// Insert text at the caret — or at the very start if the field isn't focused / was never used
+    /// (so dictation lands where the user left the cursor). Keeps undo and notifies the binding.
+    func insertAtCaret(_ s: String) {
+        let focused = (window?.firstResponder === self)
+        let len = (string as NSString).length
+        var r = focused ? selectedRange() : NSRange(location: 0, length: 0)
+        if r.location > len { r = NSRange(location: len, length: 0) }
+        window?.makeFirstResponder(self)
+        insertText(s, replacementRange: r)
+    }
 
     override func keyDown(with event: NSEvent) {
         let shift = event.modifierFlags.contains(.shift)

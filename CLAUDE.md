@@ -92,6 +92,8 @@ Notarize with `xcrun notarytool submit ... --keychain-profile "rounds-notary"`. 
 <!-- auto-added 2026-06-22 -->
 Release builds must NOT include the `com.apple.security.get-task-allow` entitlement — Apple rejects notarization if it's present. Always archive/build with the Release configuration (or strip the entitlement explicitly); Debug builds inject it automatically.
 <!-- auto-added 2026-06-22 -->
+The app carries `rounds.entitlements` (`CODE_SIGN_ENTITLEMENTS`, both configs) with `com.apple.security.device.audio-input` — required for microphone/voice input under the hardened runtime. `tools/notarize.sh` re-signs the bundle inside-out, and the FINAL `codesign` of the main `.app` MUST pass `--entitlements "$ROOT/rounds.entitlements"`; a bare `codesign --sign` re-seal strips entitlements and silently kills mic access in the shipped build. Keep that flag, and keep the Sparkle nested helpers re-signed WITHOUT `--entitlements` (they don't need it).
+<!-- auto-added 2026-06-27 -->
 
 ## macOS 14.0 deployment target and Compat.swift shims
 

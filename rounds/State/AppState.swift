@@ -184,6 +184,28 @@ final class AppState {
     var customInstructions = ""
     var permissionMode: RoundsPermissionMode = .bypass   // how Claude Code asks before acting
     var showSettings = false
+    var showOpenAIKeySheet = false   // voice input: prompt for the user's OpenAI key when none is set
+
+    /// Optional language hint for Whisper (improves accuracy when the user picked a language).
+    var whisperLanguageHint: String? {
+        switch language {
+        case "English": "en"; case "Russian": "ru"; case "Spanish": "es"; case "German": "de"
+        case "French": "fr"; case "Portuguese": "pt"; case "Ukrainian": "uk"; case "Hindi": "hi"
+        case "Chinese (Simplified)": "zh"; default: nil   // "Auto (match the user)" → let Whisper detect
+        }
+    }
+
+    /// Insert a voice transcript into the active chat's input at the caret (or at the start if the
+    /// input isn't focused). Routes through the live NSTextView so undo + the caret behave natively.
+    func insertVoiceTranscript(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let rt = activeRuntime else { return }
+        if let tv = rt.inputTextView {
+            tv.insertAtCaret(t)
+        } else {
+            rt.draft = rt.draft.isEmpty ? t : t + " " + rt.draft
+        }
+    }
 
     var checklistComplete: Bool { toolPaths.claudeInstalled && toolPaths.nodeInstalled && brainInstalled && !toolPaths.claudeNeedsLogin }
     var hasContent: Bool { !documents.isEmpty || !hypotheses.isEmpty }

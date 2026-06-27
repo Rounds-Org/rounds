@@ -80,10 +80,12 @@ struct ChatView: View {
                 }
                 MentionField(text: draftBinding(rt), references: refsBinding(rt),
                              placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
-                             onSend: send, autofocus: true)
+                             onSend: send, autofocus: true,
+                             onRegisterTextView: { rt.inputTextView = $0 })
                 HStack(spacing: 10) {
                     InputControls()
                     Spacer()
+                    VoiceInputButton()
                     attachMenu
                 }
             }

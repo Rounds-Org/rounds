@@ -33,6 +33,8 @@ Rounds spawns the `claude` CLI as a subprocess; sandboxing blocks that exec and 
 
 When editing brain prompts, maintain a professional clinical reasoning standard: analyze all available information before drawing conclusions, ask targeted clarifying questions only when genuinely needed, and avoid surface-level or assumption-based diagnoses. Do NOT let prompts regress to generic chatbot-style responses — the user explicitly requires professional-doctor-level reasoning, not a "ChatGPT-style" shallow pass.
 <!-- auto-added 2026-06-29 -->
+"Go see a doctor" must be a supplementary measure, NOT the primary recommendation. The brain must do deep analysis first — covering all available context, researching differentials, and reaching its own conclusions. Deferring to a doctor as the main output has near-zero product value and was an explicit user correction.
+<!-- auto-added 2026-07-01 -->
 
 ## Brain prompt regeneration
 
@@ -177,3 +179,8 @@ Auth is probed at startup via `claude auth status --json` → `ToolPaths.loggedI
 
 There are currently NO Rounds-native intercepted slash commands — every `/`-prefixed message is forwarded raw to Claude Code (see the `chatPrompt()` pass-through rule above). `ChatRuntime` has no `handleRoundsCommand()` anymore; it was only used for `/remote-control`, which was removed because Claude Code Remote Control is interactive-only and a no-op in Rounds' stream-json mode (see the `rounds-remote-control` memory). If you reintroduce a Rounds-native command, intercept it in `ChatRuntime.send()` BEFORE the turn is dispatched, AND keep the Dashboard ask box's `!text.hasPrefix("/")` guard in sync — otherwise `/`-commands silently land in the symptom interview instead of a chat.
 <!-- auto-added 2026-06-22 -->
+
+## Home composer draft lives on AppState, not @State in DashboardView
+
+`homeDraft`, `homeDraftRefs`, and `homeInputTextView` must stay on `AppState`. The window-level drag handler (`ContentView.handleDrop`) and `insertVoiceTranscript` both need to write into the Home composer without going through the view — `@State` is unreachable from there. Do NOT move these back into local view state.
+<!-- auto-added 2026-07-01 -->

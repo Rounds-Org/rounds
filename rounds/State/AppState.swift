@@ -186,6 +186,12 @@ final class AppState {
     var showSettings = false
     var showOpenAIKeySheet = false   // voice input: prompt for the user's OpenAI key when none is set
 
+    // Home (Dashboard) composer draft — hoisted here (not @State in the view) so the window-level
+    // drag handler can drop files into "a new chat from Home", and the mic can dictate into it.
+    var homeDraft = ""
+    var homeDraftRefs: [Reference] = []
+    @ObservationIgnored weak var homeInputTextView: ChatKeyTextView?   // Home box editor, for voice insert at caret
+
     /// Optional language hint for Whisper (improves accuracy when the user picked a language).
     var whisperLanguageHint: String? {
         switch language {
@@ -199,11 +205,64 @@ final class AppState {
     /// input isn't focused). Routes through the live NSTextView so undo + the caret behave natively.
     func insertVoiceTranscript(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, let rt = activeRuntime else { return }
-        if let tv = rt.inputTextView {
+        guard !t.isEmpty else { return }
+        // Route to whichever composer is showing: an open chat, else the Home box.
+        if activeChatTab != nil, let rt = activeRuntime {
+            if let tv = rt.inputTextView { tv.insertAtCaret(t) }
+            else { rt.draft = rt.draft.isEmpty ? t : t + " " + rt.draft }
+        } else if let tv = homeInputTextView {
             tv.insertAtCaret(t)
         } else {
-            rt.draft = rt.draft.isEmpty ? t : t + " " + rt.draft
+            homeDraft = homeDraft.isEmpty ? t : t + " " + homeDraft
+        }
+    }
+
+    /// Stage file(s) into the vault for a not-yet-created chat and return file references. Used by the
+    /// Home composer's paperclip and the Home drag zone — the refs ride along when the chat is sent.
+    func stageFilesForNewChat(_ urls: [URL]) -> [Reference] {
+        var refs: [Reference] = []
+        for url in Self.expandToFiles(urls) {
+            guard let rel = stageChatAttachment(url, chatId: "_pending") else { continue }
+            refs.append(Reference(kind: .file, id: rel, label: url.lastPathComponent))
+        }
+        return refs
+    }
+
+    /// Attach file(s) to the Home composer's draft (a new chat), shown as thumbnails in the Home box.
+    func attachFilesToHomeDraft(_ urls: [URL]) {
+        let refs = stageFilesForNewChat(urls)
+        guard !refs.isEmpty else { return }
+        for r in refs where !homeDraftRefs.contains(r) { homeDraftRefs.append(r) }
+        selectHome()
+        Analytics.track(.documentAdded(isImaging: false))
+        toast = refs.count == 1 ? "Attached to a new chat" : "Attached \(refs.count) files to a new chat"
+    }
+
+    /// Remove a Home-draft attachment and delete its staged "_pending" file (so a discarded draft
+    /// doesn't leave orphaned copies on disk).
+    func removeHomeDraftAttachment(_ ref: Reference) {
+        homeDraftRefs.removeAll { $0 == ref }
+        if ref.kind == .file, ref.id.hasPrefix("chats/attachments/_pending/") {
+            try? FileManager.default.removeItem(at: vault.root.appendingPathComponent(ref.id))
+        }
+    }
+
+    /// On send, move any "_pending" Home-draft attachments into the real chat's folder and repoint
+    /// the refs — so the files are tied to the chat (and reaped with it), not orphaned in _pending.
+    func rehomePendingRefs(_ refs: [Reference], toChat chatId: String) -> [Reference] {
+        let fm = FileManager.default
+        let dir = vault.chatsDir.appendingPathComponent("attachments/\(chatId)", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return refs.map { ref in
+            guard ref.kind == .file, ref.id.hasPrefix("chats/attachments/_pending/") else { return ref }
+            let src = vault.root.appendingPathComponent(ref.id)
+            let base = src.deletingPathExtension().lastPathComponent, ext = src.pathExtension
+            var dest = dir.appendingPathComponent(src.lastPathComponent); var n = 2
+            while fm.fileExists(atPath: dest.path) {
+                dest = dir.appendingPathComponent(ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"); n += 1
+            }
+            guard (try? fm.moveItem(at: src, to: dest)) != nil else { return ref }
+            return Reference(kind: .file, id: "chats/attachments/\(chatId)/\(dest.lastPathComponent)", label: ref.label)
         }
     }
 

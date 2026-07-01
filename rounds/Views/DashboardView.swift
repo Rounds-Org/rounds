@@ -7,11 +7,13 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct DashboardView: View {
     @Environment(AppState.self) private var app
-    @State private var ask = ""
-    @State private var askRefs: [Reference] = []
+    // The Home composer draft lives on AppState (so the drag handler + mic can reach it).
+    private var askBinding: Binding<String> { Binding(get: { app.homeDraft }, set: { app.homeDraft = $0 }) }
+    private var askRefsBinding: Binding<[Reference]> { Binding(get: { app.homeDraftRefs }, set: { app.homeDraftRefs = $0 }) }
     @State private var stepPersonFilter: String?   // nil = everyone
 
     var body: some View {
@@ -66,42 +68,68 @@ struct DashboardView: View {
 
     private var askBox: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !askRefs.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(askRefs) { ref in
-                        HStack(spacing: 4) {
-                            Image(systemName: ref.iconName).zfont(.caption2)
-                            Text(ref.label).zfont(.caption2).lineLimit(1)
-                            Button { askRefs.removeAll { $0 == ref } } label: { Image(systemName: "xmark").zfont(size: 8) }
-                                .buttonStyle(.borderless)
+            if !app.homeDraftRefs.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        ForEach(app.homeDraftRefs) { ref in
+                            RefAttachment(ref: ref, compact: true) { app.removeHomeDraftAttachment(ref) }
                         }
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
                     }
+                    .padding(.top, 6).padding(.trailing, 6)
                 }
             }
-            MentionField(text: $ask, references: $askRefs,
+            MentionField(text: askBinding, references: askRefsBinding,
                          placeholder: "Describe a symptom, ask about a result, or @-reference…",
-                         onSend: submit)
-            InputControls()
+                         onSend: submit,
+                         onRegisterTextView: { app.homeInputTextView = $0 })
+            HStack(spacing: 10) {
+                InputControls()
+                Spacer()
+                VoiceInputButton()
+                homeAttachMenu
+            }
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline))
     }
 
+    // Paperclip on Home: choose the destination (a new chat vs. Rounds' general filing), then pick files.
+    private var homeAttachMenu: some View {
+        Menu {
+            Button { pickAndAttach(toNewChat: true) } label: { Label("Attach to a new chat", systemImage: "bubble.left") }
+            Button { pickAndAttach(toNewChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
+        } label: {
+            Image(systemName: "paperclip").zfont(.body).foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("Attach a document — to a new chat, or to Rounds for filing")
+    }
+
+    private func pickAndAttach(toNewChat: Bool) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Attach"
+        panel.message = toNewChat ? "Add document(s) to a new chat" : "Add document(s) to Rounds"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        if toNewChat { app.attachFilesToHomeDraft(panel.urls) } else { app.beginImport(panel.urls) }
+    }
+
     private func submit() {
-        let text = ask.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = app.homeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        let refs = askRefs
-        ask = ""; askRefs = []
+        let refs = app.homeDraftRefs
+        app.homeDraft = ""; app.homeDraftRefs = []
         // Plain symptom text (no @-references) opens a persisted Complaint + history interview;
         // questions, references, and /-commands go to chat.
         if refs.isEmpty, !text.hasPrefix("/"), app.looksLikeSymptom(text) {
             app.beginComplaint(text)
         } else {
-            app.startNewChat()
-            app.beginSendChat(text, references: refs)
+            let id = app.startNewChat()
+            let finalRefs = app.rehomePendingRefs(refs, toChat: id)
+            app.beginSendChat(text, references: finalRefs)
         }
     }
 

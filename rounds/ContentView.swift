@@ -87,19 +87,18 @@ struct ContentView: View {
     /// right = process generally (today's behavior). Otherwise the single general overlay.
     @ViewBuilder private var dropOverlay: some View {
         if showDropZones && app.booted {
-            if app.activeChatTab != nil {
-                HStack(spacing: 0) {
-                    DropZone(icon: "bubble.left.fill", title: "Add to this chat",
-                             subtitle: "Attach to the open conversation", active: leftTargeted)
-                        .onDrop(of: [.fileURL], isTargeted: $leftTargeted) { handleDrop($0, toChat: true); return true }
-                    DropZone(icon: "tray.and.arrow.down.fill", title: "Add to Rounds",
-                             subtitle: "Read on-device and file it", active: rightTargeted)
-                        .onDrop(of: [.fileURL], isTargeted: $rightTargeted) { handleDrop($0, toChat: false); return true }
-                }
-                .ignoresSafeArea()
-            } else {
-                DropOverlay()
+            let inChat = app.activeChatTab != nil
+            HStack(spacing: 0) {
+                DropZone(icon: "bubble.left.fill",
+                         title: inChat ? "Add to this chat" : "Attach to a new chat",
+                         subtitle: inChat ? "Attach to the open conversation" : "Start a new chat from Home with this file",
+                         active: leftTargeted)
+                    .onDrop(of: [.fileURL], isTargeted: $leftTargeted) { handleDrop($0, toChat: true); return true }
+                DropZone(icon: "tray.and.arrow.down.fill", title: "Add to Rounds",
+                         subtitle: "Read on-device and file it", active: rightTargeted)
+                    .onDrop(of: [.fileURL], isTargeted: $rightTargeted) { handleDrop($0, toChat: false); return true }
             }
+            .ignoresSafeArea()
         }
     }
 
@@ -159,8 +158,12 @@ struct ContentView: View {
         }
         group.notify(queue: .main) {
             guard !urls.isEmpty else { return }
-            if toChat, let cid = app.activeChatTab { app.attachFilesToChat(urls, chatId: cid) }
-            else { app.beginImport(urls) }
+            if toChat {
+                if let cid = app.activeChatTab { app.attachFilesToChat(urls, chatId: cid) }
+                else { app.selectHome(); app.attachFilesToHomeDraft(urls) }   // no chat open → a new chat from Home
+            } else {
+                app.beginImport(urls)
+            }
         }
     }
 }
@@ -248,25 +251,6 @@ private struct BootSkeleton: View {
     }
 }
 
-private struct DropOverlay: View {
-    var body: some View {
-        ZStack {
-            Theme.accent.opacity(0.10)
-            VStack(spacing: 12) {
-                Image(systemName: "tray.and.arrow.down.fill")
-                    .zfont(size: 44).foregroundStyle(Theme.accent)
-                Text("Release to add to Rounds").zfont(.title2, .semibold)
-                Text("Rounds will read it on-device and ask whose it is before filing.")
-                    .zfont(.callout).foregroundStyle(.secondary)
-            }
-            .padding(28)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [8])))
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-    }
-}
 
 /// Identifiable wrapper so IntakeState can drive a `.sheet(item:)`.
 struct IntakeBox: Identifiable, Equatable {

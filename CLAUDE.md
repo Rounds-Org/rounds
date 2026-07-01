@@ -29,6 +29,11 @@ Rounds spawns the `claude` CLI as a subprocess; sandboxing blocks that exec and 
 `chatPrompt()` in `AppState.swift` detects messages that start with `/` and returns them **raw** — no health-context framing, no reference block — so Claude Code's own command machinery (e.g. `/help`, `/model`, skills) can handle them. Do not remove or reorder this check when editing `chatPrompt()`.
 <!-- auto-added 2026-06-21 -->
 
+## Brain prompt: clinical reasoning standard
+
+When editing brain prompts, maintain a professional clinical reasoning standard: analyze all available information before drawing conclusions, ask targeted clarifying questions only when genuinely needed, and avoid surface-level or assumption-based diagnoses. Do NOT let prompts regress to generic chatbot-style responses — the user explicitly requires professional-doctor-level reasoning, not a "ChatGPT-style" shallow pass.
+<!-- auto-added 2026-06-29 -->
+
 ## Brain prompt regeneration
 
 `rounds/Brain/BrainResources.swift` is a generated file. After editing any file in `brain/prompts/` or `brain/claude/CLAUDE.md`, bump `brainVersion` in `tools/gen_brain_resources.py` and run `python3 tools/gen_brain_resources.py` to regenerate it — otherwise the running app sees stale prompts.

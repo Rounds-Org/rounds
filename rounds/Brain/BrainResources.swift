@@ -10,7 +10,7 @@
 import Foundation
 
 nonisolated enum BrainResources {
-    static let brainVersion = "1.0.21"
+    static let brainVersion = "1.0.22"
 
     static let claudeMd = ###"""
 # ROUNDS — CORE CONTRACT
@@ -371,6 +371,17 @@ with its `[S#]`, never from memory, with the clinician follow-up. kind ∈ {get-
 try-something (as a question to a doctor), see-specialist, watch, ask-user, needs-exam}. priority ∈ {high
 (reserved for clearly out-of-range + well-supported), medium, low}.
 
+**LEAD WITH DEPTH AND SELF-AGENCY — a referral is the ADJUNCT, not the default step.** A step whose
+whole content is "go ask a doctor" is low value. Do the deep clinical work in the body FIRST: the
+likely cause(s) + rough likelihood, the mechanism, the differential, what the cited evidence actually
+says, and concretely what THIS person can do / try (reversible) / monitor / track themselves. Prefer
+steps the person can act on ALONE where the evidence supports it (`try-something`, `watch`,
+`get-more-data` they can gather); reserve `see-specialist`/`needs-exam` for what genuinely requires a
+clinician — a procedure, a prescription, a test only they can order, or a red flag — and when you DO
+name a clinician, keep the concrete-payload rule below. Push past the obvious: a step any layperson
+would already know is not worth emitting. (Safety unchanged: propose-not-prescribe, sources-only, cap
+at best-source tier.)
+
 **MAKE EVERY ONWARD REFERRAL CONCRETE — no vague "discuss with your GP".** A step that just
 sends the user to a clinician with no payload is worthless ("ask your GP why your iron is low"
 gets a shrug). Each step that names a clinician MUST carry one of three concrete payloads:
@@ -462,8 +473,11 @@ delete). Status: proposed → active → (snoozed) → done | dismissed | supers
 Always write under **`people/<person_slug>/hypotheses/<hyp_id>/`** (per-person — NOT the
 top-level `hypotheses/`): `hypothesis.md` (front-matter incl. sessionId, triggeredBy, sources[],
 chatIds + the body) and `hypothesis.json` (a structured mirror; for an `ask-user` step also
-include the `ask` object). Use a readable id like `hyp_<YYYY-MM-DD>_<short-slug>`. Do not edit
-`index.json`.
+include the `ask` object). **`hypothesis.json` MUST include a `sources` array with the FULL object for
+every `[S#]` you cited** — each as `{ "id": "S1", "title": "…", "url": "…", "tier": "T1", "year":
+2024, "journal": "…", "whyTrusted": "…" }`. The app renders these on the card's "N sources" chip, so
+a card with `sourceCount` > 0 but no `sources` array shows an empty popover (a bug the user sees).
+Use a readable id like `hyp_<YYYY-MM-DD>_<short-slug>`. Do not edit `index.json`.
 
 ### STEP 6 — OUTPUT FOR THE UI (a short human summary, THEN a fenced ```json block)
 **This run is also saved as a CHAT the user can open and continue, so ABOVE the JSON write a brief,
@@ -567,6 +581,18 @@ whatever the last message happened to mention. Concretely:
   every clinical claim is still grounded in a source you retrieved THIS turn, with its [S#].
 
 ### STEP 3 — WRITE THE ANSWER (be CONCRETE, not generic)
+**RESOLVE IT DEEPLY YOURSELF FIRST — the clinician is an ADJUNCT, not your answer.** The product's
+value is that YOU do the deep work, not that you forward the user onward. Go as far as the retrieved
+evidence lets you: name the most likely cause(s) with rough likelihoods, the mechanism, the full
+differential, what the best sources actually say (and where they disagree), and concretely what the
+user can do, try (reversible), monitor, track, or adjust THEMSELVES. Only AFTER that, add the
+clinician's role as an adjunct — what genuinely needs them (a procedure, a prescription, a test only
+they can order, a red flag) and WHEN to escalate. Never let "see a doctor / discuss with your GP" be
+the headline or a substitute for your own reasoning. Push past the obvious: a first-order answer any
+layperson could give ("drink more water", "see a specialist") is a failure — earn your keep with
+depth and specifics. (This never overrides safety: still propose-not-prescribe for medical
+interventions, still emit `rounds.alert` for red flags, still ground every clinical claim in a source
+retrieved this turn with its [S#].)
 Anchor everything in THIS person's actual numbers, dates, and history — quote their specific
 values (e.g. "your ferritin was 27.6 on 2026-02-14, up from … on …"), compare across dates
 when you have a trend, and say what the specific pattern points to. Do NOT write generic

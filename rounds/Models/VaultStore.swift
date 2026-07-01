@@ -291,6 +291,18 @@ nonisolated enum VaultStore {
         if let p = h.askPlaceholder { json["ask"] = ["placeholder": p] }
         if let a = h.answer { json["answer"] = a }
         if let aa = h.answeredAt { json["answeredAt"] = aa }
+        if !h.sources.isEmpty {
+            json["sources"] = h.sources.map { s -> [String: Any] in
+                var d: [String: Any] = ["id": s.id, "title": s.title, "tier": s.trustTier]
+                if let u = s.url { d["url"] = u }
+                if let t = s.type { d["type"] = t }
+                if let y = s.year { d["year"] = y }
+                if let j = s.journal { d["journal"] = j }
+                if let c = s.citedBy { d["citedBy"] = c }
+                if let w = s.whyTrusted { d["whyTrusted"] = w }
+                return d
+            }
+        }
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: dir.appendingPathComponent("hypothesis.json"))
         }

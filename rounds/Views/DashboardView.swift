@@ -557,7 +557,8 @@ struct HypothesisCard: View {
                     }
                     Text(hyp.title).zfont(.headline)
                         .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                        .contentShape(Rectangle())
+                        .onTapGesture { withAnimation { expanded.toggle() } }   // tap the title to open, like Details
                     Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)

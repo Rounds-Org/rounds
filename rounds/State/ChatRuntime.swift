@@ -190,7 +190,7 @@ final class ChatRuntime: Identifiable {
             if !parsed.sources.isEmpty { sources = parsed.sources }
             if let a = parsed.alert { alert = a }
             if !parsed.hypotheses.isEmpty {
-                let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId)
+                let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId, sources: parsed.sources)
                 if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
                     messages[idx].hypotheses = saved
                 }
@@ -272,7 +272,7 @@ final class ChatRuntime: Identifiable {
         // The chat surfaced a NEW or revised next step — the app persists it (chat is read-only) so
         // it shows on the dashboard, and we attach it to this message so it renders inline as a card.
         if !parsed.hypotheses.isEmpty {
-            let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId)
+            let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId, sources: parsed.sources)
             if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
                 messages[idx].hypotheses = saved
             }

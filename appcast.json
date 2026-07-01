@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.4.1",
+  "latestVersion": "1.4.2",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.1/Rounds-1.4.1.dmg",
-  "notes": "Sharper clinical reasoning in chat: it holds one evolving differential instead of swinging the likely cause to your latest message, checks a diagnosis's hallmarks before building on it (no pushing sleep apnea without its signs, no weight-loss advice at a normal BMI), prefers the simplest explanation first, and asks a few key questions rather than one every turn. The home box now recognizes symptoms written in Russian and Ukrainian (not just English), so they start the structured intake and red-flag check. Also fixed the voice recording bar overlapping its cancel button."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.2/Rounds-1.4.2.dmg",
+  "notes": "Rounds now reasons more deeply instead of defaulting to 'see a doctor'. Next steps and chat lead with the likely cause, mechanism, differential, what the evidence says, and what you can do/monitor/try yourself — with a clinician as an adjunct for what genuinely needs one. Next-step cards: click the title to expand (like Details), and the 'N sources' chip now shows the actual citations."
 }

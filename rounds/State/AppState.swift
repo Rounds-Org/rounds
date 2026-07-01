@@ -580,18 +580,36 @@ final class AppState {
     /// parsed hypotheses to files (so they appear on the dashboard), then reloads. Returns the saved
     /// steps so the chat can show them inline.
     @discardableResult
-    func persistChatHypotheses(_ hyps: [Hypothesis], sessionId: String?) -> [Hypothesis] {
+    func persistChatHypotheses(_ hyps: [Hypothesis], sessionId: String?, sources: [Source] = []) -> [Hypothesis] {
         guard !hyps.isEmpty else { return [] }
         var saved: [Hypothesis] = []
         for var h in hyps {
             if h.personId.isEmpty { h.personId = "_self" }
             if h.status.isEmpty { h.status = "proposed" }
             if h.sessionId == nil { h.sessionId = sessionId }
+            if h.sources.isEmpty, !sources.isEmpty { h.sources = Self.sourcesFor(h, from: sources) }
             VaultStore.saveHypothesis(h, vault)
             saved.append(h)
         }
         reload()
         return saved
+    }
+
+    /// The turn's sources this hypothesis cites (by [S#] in its title/whyNow/body) so the "N sources"
+    /// chip has real, clickable citations. Falls back to the first `sourceCount` sources if the card
+    /// carries a count but no inline [S#] markers.
+    static func sourcesFor(_ h: Hypothesis, from turn: [Source]) -> [Source] {
+        let text = "\(h.title) \(h.whyNow) \(h.body ?? "")"
+        var ids = Set<String>()
+        if let re = try? NSRegularExpression(pattern: #"\[S(\d+)\]"#) {
+            let ns = text as NSString
+            re.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+                if let m, let r = Range(m.range(at: 1), in: text) { ids.insert("S" + text[r]) }
+            }
+        }
+        let cited = turn.filter { ids.contains($0.id) }
+        if !cited.isEmpty { return cited }
+        return h.sourceCount > 0 ? Array(turn.prefix(h.sourceCount)) : []
     }
 
     func deleteChat(_ id: String) {

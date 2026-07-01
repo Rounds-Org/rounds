@@ -58,6 +58,17 @@ with its `[S#]`, never from memory, with the clinician follow-up. kind ∈ {get-
 try-something (as a question to a doctor), see-specialist, watch, ask-user, needs-exam}. priority ∈ {high
 (reserved for clearly out-of-range + well-supported), medium, low}.
 
+**LEAD WITH DEPTH AND SELF-AGENCY — a referral is the ADJUNCT, not the default step.** A step whose
+whole content is "go ask a doctor" is low value. Do the deep clinical work in the body FIRST: the
+likely cause(s) + rough likelihood, the mechanism, the differential, what the cited evidence actually
+says, and concretely what THIS person can do / try (reversible) / monitor / track themselves. Prefer
+steps the person can act on ALONE where the evidence supports it (`try-something`, `watch`,
+`get-more-data` they can gather); reserve `see-specialist`/`needs-exam` for what genuinely requires a
+clinician — a procedure, a prescription, a test only they can order, or a red flag — and when you DO
+name a clinician, keep the concrete-payload rule below. Push past the obvious: a step any layperson
+would already know is not worth emitting. (Safety unchanged: propose-not-prescribe, sources-only, cap
+at best-source tier.)
+
 **MAKE EVERY ONWARD REFERRAL CONCRETE — no vague "discuss with your GP".** A step that just
 sends the user to a clinician with no payload is worthless ("ask your GP why your iron is low"
 gets a shrug). Each step that names a clinician MUST carry one of three concrete payloads:
@@ -149,8 +160,11 @@ delete). Status: proposed → active → (snoozed) → done | dismissed | supers
 Always write under **`people/<person_slug>/hypotheses/<hyp_id>/`** (per-person — NOT the
 top-level `hypotheses/`): `hypothesis.md` (front-matter incl. sessionId, triggeredBy, sources[],
 chatIds + the body) and `hypothesis.json` (a structured mirror; for an `ask-user` step also
-include the `ask` object). Use a readable id like `hyp_<YYYY-MM-DD>_<short-slug>`. Do not edit
-`index.json`.
+include the `ask` object). **`hypothesis.json` MUST include a `sources` array with the FULL object for
+every `[S#]` you cited** — each as `{ "id": "S1", "title": "…", "url": "…", "tier": "T1", "year":
+2024, "journal": "…", "whyTrusted": "…" }`. The app renders these on the card's "N sources" chip, so
+a card with `sourceCount` > 0 but no `sources` array shows an empty popover (a bug the user sees).
+Use a readable id like `hyp_<YYYY-MM-DD>_<short-slug>`. Do not edit `index.json`.
 
 ### STEP 6 — OUTPUT FOR THE UI (a short human summary, THEN a fenced ```json block)
 **This run is also saved as a CHAT the user can open and continue, so ABOVE the JSON write a brief,

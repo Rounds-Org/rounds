@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.4.4",
+  "latestVersion": "1.4.5",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.4/Rounds-1.4.4.dmg",
-  "notes": "Input reliability: text no longer vanishes while you scroll or after switching chats, the send button no longer gets stuck disabled, and your draft (text + attachments) stays with its chat. Analyzing documents no longer yanks you into a new chat while you're working elsewhere — it opens quietly in the background (only in front when you're on Home). Fixed the 'Identifying next steps for …' link on Home opening the wrong family member's chat — it now opens the person named in the status."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.5/Rounds-1.4.5.dmg",
+  "notes": "Rounds now notifies you when a chat finishes working — but only when you're not already watching it (the app isn't in front, or you're on a different tab). Before, only an automatic next-steps update sent a notification; a finished chat turn didn't. (Notifications must be allowed for Rounds in System Settings → Notifications.)"
 }

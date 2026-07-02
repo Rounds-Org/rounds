@@ -8,6 +8,7 @@
 
 import Foundation
 import Observation
+import AppKit
 
 /// A message the user sent while a turn was still streaming. Held in `ChatRuntime.queued`,
 /// shown as a grey deletable chip, and dispatched (in order) the moment the active turn ends.
@@ -111,12 +112,24 @@ final class ChatRuntime: Identifiable {
     private func runQueue(first: QueuedTurn) async {
         // Only this task resets streaming state on NORMAL completion. If it was cancelled (Stop),
         // stop() already reset it — and a fresh turn may now own isStreaming, so don't clobber it.
-        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = "" } }
+        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = ""; notifyFinishedIfAway() } }
         var turn: QueuedTurn? = first
         while let t = turn, !Task.isCancelled {
             await runTurn(t.text, t.references)
             turn = queued.isEmpty ? nil : queued.removeFirst()
         }
+    }
+
+    /// When a chat finishes its turn(s), ping the user — but only if they're NOT already watching it
+    /// (the app isn't frontmost, or they're on a different tab). Skips the next-steps generation lane
+    /// (that has its own "updated your next steps" notification).
+    private func notifyFinishedIfAway() {
+        guard !id.hasPrefix("nextsteps-") else { return }
+        let watching = NSApp.isActive && app.activeChatTab == id
+        guard !watching else { return }
+        let name = title
+        NotificationService.shared.notify(title: "Rounds finished",
+                                          body: name.isEmpty || name == "New chat" ? "Your answer is ready." : "“\(name)” is ready.")
     }
 
     func stop() {

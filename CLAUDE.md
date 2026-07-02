@@ -186,3 +186,8 @@ There are currently NO Rounds-native intercepted slash commands — every `/`-pr
 
 `homeDraft`, `homeDraftRefs`, and `homeInputTextView` must stay on `AppState`. The window-level drag handler (`ContentView.handleDrop`) and `insertVoiceTranscript` both need to write into the Home composer without going through the view — `@State` is unreachable from there. Do NOT move these back into local view state.
 <!-- auto-added 2026-07-01 -->
+
+## Chat finish notifications: only when not watching
+
+`notifyFinishedIfAway()` must fire ONLY when `!(NSApp.isActive && app.activeChatTab == id)`. Do NOT notify if the user is already on that chat tab with the app frontmost — it's noise. Also skip any chat whose `id` starts with `nextsteps-`; those chats send their own "updated your next steps" notification via a separate path.
+<!-- auto-added 2026-07-02 -->

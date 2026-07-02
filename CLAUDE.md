@@ -130,6 +130,8 @@ Chat `.md` files store `sessionId: <id>` in their front-matter (written by `pers
 
 Per-chat unsent draft text and `@`-references must live on `ChatRuntime` (as `draft` and `draftReferences`), NOT in `@State` inside `ChatView`. SwiftUI destroys `@State` when the view leaves the tab, silently clearing whatever the user had typed. `ChatRuntime` outlives the view and preserves the draft correctly.
 <!-- auto-added 2026-06-22 -->
+In `ChatInputEditor.updateNSView`, you MUST call `context.coordinator.parent = self` before anything else — the `NSTextView` is reused across chat switches, so without this re-point the coordinator's `textDidChange` writes into a stale runtime's draft, the visible text is wiped on the next re-render, and the send button reads empty.
+<!-- auto-added 2026-07-02 -->
 
 ## Text selection in long-form markdown body
 

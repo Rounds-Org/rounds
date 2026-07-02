@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.4.3",
+  "latestVersion": "1.4.4",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.3/Rounds-1.4.3.dmg",
-  "notes": "The Home box is now a full composer, like the chat input: dictate with the microphone, attach files with the paperclip, and see attachments as thumbnails. Drag-and-drop onto the window now splits into two zones everywhere — drop on the left to attach to a new chat (from Home) or the open chat, or on the right to file it into Rounds."
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.4/Rounds-1.4.4.dmg",
+  "notes": "Input reliability: text no longer vanishes while you scroll or after switching chats, the send button no longer gets stuck disabled, and your draft (text + attachments) stays with its chat. Analyzing documents no longer yanks you into a new chat while you're working elsewhere — it opens quietly in the background (only in front when you're on Home). Fixed the 'Identifying next steps for …' link on Home opening the wrong family member's chat — it now opens the person named in the status."
 }

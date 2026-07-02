@@ -64,6 +64,11 @@ struct ChatInputEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? ChatKeyTextView else { return }
+        // CRITICAL: re-point the coordinator at the CURRENT struct so its text binding tracks the
+        // active chat. The NSTextView is reused across chat switches / re-renders; without this,
+        // textDidChange keeps writing to a STALE runtime's draft — the visible text then gets wiped
+        // on the next re-render and the send button reads empty. (Fixes draft loss on scroll/switch.)
+        context.coordinator.parent = self
         tv.onEnter = onEnter; tv.onArrow = onArrow; tv.onEscape = onEscape
         tv.placeholderString = placeholder
         if tv.string != text {     // external change (send-clear, pick/slash insert, draft restore)
@@ -75,7 +80,7 @@ struct ChatInputEditor: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
-        let parent: ChatInputEditor
+        var parent: ChatInputEditor          // updated each updateNSView so the binding tracks the active chat
         weak var textView: ChatKeyTextView?
         init(_ p: ChatInputEditor) { parent = p }
 

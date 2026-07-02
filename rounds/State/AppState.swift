@@ -171,6 +171,7 @@ final class AppState {
     // keep chatting while they refresh.
     var identifyingNextSteps = false
     var nextStepsStatus = ""
+    var nextStepsGeneratingSlug: String?   // person currently being generated — so the status link opens the RIGHT chat
     var nextStepsTrace: [String] = []
     var urgentBanner: RoundsAlert?      // a red flag surfaced from the background next-steps lane
     var answeringStep: String?          // id of a question-step currently being answered (card spinner)
@@ -574,6 +575,16 @@ final class AppState {
 
     func selectHome() { selectTab(.home) }
 
+    /// Open a chat's tab (and ensure its runtime), activating it only if `activate` is true. Used by
+    /// background document intake: it should NOT yank the user out of the chat they're working in.
+    @discardableResult
+    func openChat(_ id: String, activate: Bool) -> String {
+        if !openTabs.contains(.chat(id)) { openTabs.append(.chat(id)) }
+        _ = runtime(id)
+        if activate { activeTab = .chat(id); pushHistory(.chat(id)) }
+        return id
+    }
+
     func closeTab(_ item: CenterItem) {
         guard item != .home else { return }
         let idx = openTabs.firstIndex(of: item)
@@ -633,7 +644,7 @@ final class AppState {
 
     /// Open the next-steps GENERATION chat (the live Claude Code session) for the primary person —
     /// Rounds is a client over Claude Code, so the user can watch/continue that session like any chat.
-    func openNextStepsChat() { selectTab(.chat("nextsteps-\(primaryPersonSlug)")) }
+    func openNextStepsChat() { selectTab(.chat("nextsteps-\(nextStepsGeneratingSlug ?? primaryPersonSlug)")) }
 
     /// A chat surfaced a NEW or revised next step. The chat is read-only, so the APP persists the
     /// parsed hypotheses to files (so they appear on the dashboard), then reloads. Returns the saved
@@ -939,9 +950,12 @@ final class AppState {
         guard !urls.isEmpty else { return }
         batchRunning = true
 
-        let chatId = startNewChat()
+        // Open the import chat, but only PULL the user into it if they're on Home. If they're working
+        // in another chat, it opens in the background (a tab they can switch to) so their place and
+        // their draft input aren't disturbed. The analysis runs on runtime(chatId) either way.
+        let chatId = newChatId()
         importChatId = chatId
-        if activeChatTab != chatId { selectTab(.chat(chatId)) }
+        openChat(chatId, activate: activeTab == .home)
 
         var staged: [StagedFile] = []
         var fileBlocks = ""
@@ -1194,7 +1208,7 @@ final class AppState {
         identifyingNextSteps = true
         nextStepsStatus = "Reviewing your documents…"
         nextStepsTrace = []
-        defer { identifyingNextSteps = false; nextStepsStatus = ""; nextStepsTrace = [] }
+        defer { identifyingNextSteps = false; nextStepsStatus = ""; nextStepsTrace = []; nextStepsGeneratingSlug = nil }
 
         let counts = Dictionary(grouping: documents, by: { $0.personId }).mapValues { $0.count }
         let targets = counts.keys.sorted { counts[$0]! > counts[$1]! }
@@ -1204,6 +1218,7 @@ final class AppState {
 
         for slug in targetPeople {
             let name = people.first { $0.slug == slug }?.displayName ?? slug
+            nextStepsGeneratingSlug = slug   // so the status-line link opens THIS person's chat, not a fixed one
             nextStepsStatus = "Identifying next steps for \(name)…"
             let prompt = BrainResources.hypothesesPrompt
                 .replacingOccurrences(of: "{{PERSON_SLUG}}", with: slug)

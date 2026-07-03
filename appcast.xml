@@ -3,12 +3,12 @@
     <channel>
         <title>rounds</title>
         <item>
-            <title>1.4.5</title>
-            <pubDate>Thu, 02 Jul 2026 13:57:49 +0400</pubDate>
-            <sparkle:version>137</sparkle:version>
-            <sparkle:shortVersionString>1.4.5</sparkle:shortVersionString>
+            <title>1.5.0</title>
+            <pubDate>Fri, 03 Jul 2026 14:11:58 +0400</pubDate>
+            <sparkle:version>138</sparkle:version>
+            <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/Rounds-Org/rounds/releases/download/v1.4.5/Rounds-1.4.5.zip" length="8208451" type="application/octet-stream" sparkle:edSignature="wBUPvWohzwGmKL5cBeRO+1ireTRLipFi+RNFpIl/C2hDxLUdfhhrBOw27SLUO4dyRSzIA1Sqy9vVLAFygsn6Dw=="/>
+            <enclosure url="https://github.com/Rounds-Org/rounds/releases/download/v1.5.0/Rounds-1.5.0.zip" length="8202209" type="application/octet-stream" sparkle:edSignature="E7BArbAXAiSKu1gxUUTLasYi/4helXyMcoL7oHy0CL8hjLNf/nmp+tFhF6l3E8SE/lsR2QmIg0RKr/lU6Z2ZBw=="/>
         </item>
     </channel>
 </rss>

@@ -22,6 +22,12 @@ struct ChatInputEditor: NSViewRepresentable {
     var onEscape: () -> Bool      // true if consumed (close a menu)
     var onRegisterTextView: ((ChatKeyTextView?) -> Void)? = nil   // hand the live text view to the owner (voice insert)
 
+    // ⌘+/⌘− zoom: the surrounding SwiftUI scales via .zfont, but a native NSTextView has a fixed
+    // font, so it stays put unless we scale it ourselves. Read the same zoom scale and size the
+    // font off it (at scale 1 this is the plain 13pt system font — the unchanged default).
+    @Environment(\.zoomScale) private var zoomScale
+    private var scaledFont: NSFont { .systemFont(ofSize: NSFont.systemFontSize * zoomScale) }
+
     let minHeight: CGFloat = 24
     let maxHeight: CGFloat = 132
 
@@ -31,7 +37,7 @@ struct ChatInputEditor: NSViewRepresentable {
         let tv = ChatKeyTextView()
         tv.delegate = context.coordinator
         tv.string = text
-        tv.font = .preferredFont(forTextStyle: .body)
+        tv.font = scaledFont
         tv.isRichText = false
         tv.allowsUndo = true
         tv.drawsBackground = false
@@ -71,6 +77,11 @@ struct ChatInputEditor: NSViewRepresentable {
         context.coordinator.parent = self
         tv.onEnter = onEnter; tv.onArrow = onArrow; tv.onEscape = onEscape
         tv.placeholderString = placeholder
+        if tv.font?.pointSize != scaledFont.pointSize {   // ⌘+/⌘− changed the zoom — re-size the text
+            tv.font = scaledFont
+            tv.needsDisplay = true
+            DispatchQueue.main.async { context.coordinator.recomputeHeight() }
+        }
         if tv.string != text {     // external change (send-clear, pick/slash insert, draft restore)
             tv.string = text
             tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))

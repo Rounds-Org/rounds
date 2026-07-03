@@ -112,8 +112,38 @@ nonisolated enum ProtocolParser {
             if consumed { display = display.replacingOccurrences(of: block.full, with: "") }
         }
 
+        display = stripPhaseMarkers(display)
         result.displayText = display.trimmingCharacters(in: .whitespacesAndNewlines)
         return result
+    }
+
+    // MARK: pipeline phase markers ( <phase>label</phase> the brain emits per step )
+
+    private static let phaseRegex = try? NSRegularExpression(
+        pattern: "<phase>\\s*(.+?)\\s*</phase>", options: [.dotMatchesLineSeparators, .caseInsensitive])
+
+    /// The phase labels the model has emitted so far, in order. Drives the live green timeline.
+    static func extractPhases(_ raw: String) -> [String] {
+        guard let re = phaseRegex else { return [] }
+        let ns = raw as NSString
+        return re.matches(in: raw, range: NSRange(location: 0, length: ns.length)).map {
+            ns.substring(with: $0.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// Remove closed `<phase>…</phase>` markers (and a trailing unclosed `<phase…` fragment) so the
+    /// markers never appear in the visible answer — they only feed the timeline.
+    static func stripPhaseMarkers(_ s: String) -> String {
+        var out = s
+        if let re = phaseRegex {
+            out = re.stringByReplacingMatches(in: out, range: NSRange(location: 0, length: (out as NSString).length), withTemplate: "")
+        }
+        if let r = out.range(of: "<phase", options: [.backwards, .caseInsensitive]), !out[r.lowerBound...].localizedCaseInsensitiveContains("</phase>") {
+            out = String(out[..<r.lowerBound])
+        }
+        // A marker on its own line strips to a run of blank lines — collapse so the answer keeps clean paragraphs.
+        out = out.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return out
     }
 
     /// Display text for a STREAMING (possibly mid-block) buffer: strips complete protocol

@@ -42,7 +42,6 @@ final class AppState {
     var documents: [MedDocument] = []
     var hypotheses: [Hypothesis] = []
     var chats: [ChatSummary] = []
-    var complaints: [Complaint] = []
     var displayName: String = ""
 
     // Model
@@ -145,6 +144,7 @@ final class AppState {
     var currentAlert: RoundsAlert? { activeRuntime?.alert }
     var sourcesWarning: String? { activeRuntime?.sourcesWarning }
     var currentTrace: [String] { activeRuntime?.trace ?? [] }
+    var currentPhases: [PipelinePhase] { activeRuntime?.phases ?? [] }
     var currentTokens: Int { activeRuntime?.liveTokens ?? 0 }
     var isStreaming: Bool { activeRuntime?.isStreaming ?? false }
 
@@ -395,7 +395,6 @@ final class AppState {
         documents = snap.documents
         hypotheses = snap.hypotheses
         chats = snap.chats
-        complaints = snap.complaints
         displayName = snap.displayName
     }
 
@@ -957,6 +956,12 @@ final class AppState {
         importChatId = chatId
         openChat(chatId, activate: activeTab == .home)
 
+        // Start the pipeline timeline: the pre-model OCR/read step, shown while the files are read.
+        // The classify + filing model runs then append their own <phase> markers to this same timeline.
+        let pipeRt = runtime(chatId)
+        pipeRt.beginPipeline()
+        pipeRt.pushPhase(urls.count == 1 ? "Reading your file" : "Reading your \(urls.count) files")
+
         var staged: [StagedFile] = []
         var fileBlocks = ""
         for (i, url) in urls.enumerated() {
@@ -1182,7 +1187,11 @@ final class AppState {
 
         \(lines.joined(separator: "\n"))
 
-        When done, tell me in ONE warm, plain sentence what you filed and for whom (no JSON, no file paths).
+        As you work, emit `<phase>LABEL</phase>` on its OWN line the moment you BEGIN each major step — \
+        a short (3–6 word) human label in the user's language (e.g. `<phase>Проверяю существующие записи</phase>`, \
+        `<phase>Подшиваю документы</phase>`, `<phase>Обновляю память</phase>`). One per genuine step, 2–4 total; \
+        these drive the live progress timeline and are stripped from your visible reply, so they're IN ADDITION \
+        to your prose. When done, tell me in ONE warm, plain sentence what you filed and for whom (no JSON, no file paths).
         """
         let rt = runtime(b.chatId)
         let run = baseRun(prompt: prompt, policy: .readWrite, resume: b.sessionId)
@@ -1191,7 +1200,8 @@ final class AppState {
             VaultStore.reconcileStagedFile(stagedPath: f.stagedPath, vault: vault)
             removeProcessing(f.url)
         }
-        rt.append(.assistant, parsed.displayText)
+        rt.finishPhases()   // the filing run is the last leg — snapshot the whole pipeline onto this message
+        rt.append(.assistant, parsed.displayText, phases: rt.phases)
         reload()
         batch = nil
         importChatId = nil
@@ -1229,6 +1239,8 @@ final class AppState {
             // session: the request appears immediately and the trace + text stream into it as it
             // works (no more empty/stale chat). The model writes the hypothesis files itself (readWrite).
             let rt = runtime("nextsteps-\(slug)")
+            rt.beginPipeline()   // seed the timeline; the hypotheses prompt adds <phase> markers per step
+            rt.pushPhase("Reviewing \(name)'s records")
             let parsed = await rt.runGeneration(run,
                 userText: "Review my records and update my next steps.",
                 title: "Next steps · \(name)",
@@ -1332,96 +1344,7 @@ final class AppState {
         reload()
 
         // Pass B — regenerate so the recorded answer produces a sharper next step (never re-asks it).
-        // A complaint-linked question feeds its OWN encounter generation; otherwise the doc lane.
-        if let cid = hyp.complaintId, let c = complaints.first(where: { $0.id == cid }) {
-            await generateForComplaint(c, trigger: "the user just answered a history question — use it and either ask the next high-yield question or propose a concrete next step; never re-ask it")
-        } else {
-            await generateHypotheses(trigger: "the user just answered a history question — use it as confirmed primary history to form a sharper next step, and never re-ask it")
-        }
-    }
-
-    // MARK: - Complaints (symptom-first encounters)
-
-    /// A conservative heuristic: does this free text read like a symptom (-> open a Complaint) vs a
-    /// question/navigation (-> chat)? Requires a symptom word, so "what is ferritin?" stays a chat.
-    func looksLikeSymptom(_ text: String) -> Bool {
-        // Multilingual: the home box must recognise a symptom in the user's OWN language, or it
-        // silently routes it to plain chat instead of the structured intake + red-flag check.
-        let en = "pain|ache|aching|hurt|sore|dizz|nause|fatigue|exhaust|rash|swollen|swelling|cramp|headache|migraine|fever|cough|short of breath|breathless|numb|tingl|stiff|bleed|vomit|diarrh|constipat|insomnia|can'?t sleep|burning|itch|palpitation|throbbing|spasm|weakness|bloat|reflux|heartburn|discharge|\\blump\\b|dry|drie|drying"
-        let ru = "болит|болят|болел|болею|боль\\b|боли\\b|больно|ноет|ноющ|режет|колет|жжёт|жжет|жжени|печёт|печет|горло|горле|глотк|головокруж|кружит голов|тошн|рвот|температур|лихорад|озноб|кашл|кашель|насморк|заложен|сыпь|зуд|чеш|отёк|отек|опух|припух|судорог|спазм|слабост|устал|утомл|разбит|бессонниц|не сплю|плохо сплю|не могу спать|изжог|рефлюкс|отрыжк|вздут|кровот|кровит|понос|диаре|запор|онемен|покалыв|мурашк|одышк|задых|тяжело дышать|сух|пересых|высыха|сохнет|пересох|давит|сдавл|стеснени|потлив|мигрен"
-        let uk = "болить|нудот|запаморочен|висип|свербіж|свербить|набряк|задишк|кровотеч|сухіст|пересиха"
-        guard let re = try? NSRegularExpression(pattern: "\(en)|\(ru)|\(uk)", options: [.caseInsensitive]) else { return false }
-        let ns = text as NSString
-        return re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) != nil
-    }
-
-    /// Open a symptom-first encounter: red-flag check, persist a Complaint, then run the interview.
-    func beginComplaint(_ text: String, personSlug: String = "_self") {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        checkRedFlags(t)
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"; df.locale = Locale(identifier: "en_US_POSIX")
-        let c = Complaint(id: "cmp_\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString.prefix(4))",
-                          personId: personSlug, title: String(t.prefix(70)), summary: t,
-                          status: "open", openedAt: df.string(from: Date()))
-        persistComplaint(c)
-        complaints.insert(c, at: 0)
-        selectHome()
-        toast = "Tracking this as a concern — I'll ask a couple of questions."
-        Task { await generateForComplaint(c) }
-    }
-
-    private func persistComplaint(_ c: Complaint) {
-        let dir = vault.complaintsDir(c.personId).appendingPathComponent(c.id, isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let obj: [String: Any] = ["schemaVersion": 1, "id": c.id, "personId": c.personId,
-                                  "title": c.title, "summary": c.summary, "status": c.status, "openedAt": c.openedAt]
-        if let d = try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted) {
-            try? d.write(to: dir.appendingPathComponent("complaint.json"))
-        }
-        let md = "# \(c.title)\n\nstatus: \(c.status)\nopened: \(c.openedAt)\n\nWhat the user said:\n\(c.summary)\n"
-        try? md.data(using: .utf8)?.write(to: dir.appendingPathComponent("complaint.md"))
-    }
-
-    /// Run the symptom-first interview/next-steps pass for a complaint (background next-steps lane).
-    func generateForComplaint(_ complaint: Complaint, trigger: String = "the user described a new symptom") async {
-        identifyingNextSteps = true
-        nextStepsStatus = "Thinking about “\(complaint.title)”…"
-        nextStepsTrace = []
-        defer { identifyingNextSteps = false; nextStepsStatus = ""; nextStepsTrace = [] }
-
-        let slug = complaint.personId
-        let prompt = BrainResources.complaintPrompt
-            .replacingOccurrences(of: "{{PERSON_SLUG}}", with: slug)
-            .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
-            .replacingOccurrences(of: "{{COMPLAINT_ID}}", with: complaint.id)
-            .replacingOccurrences(of: "{{TRIGGER}}", with: trigger)
-        + "\n\n--- THE COMPLAINT ---\nTitle: \(complaint.title)\nWhat the user said: \(complaint.summary)\nOpened: \(complaint.openedAt)\nConfirmed history gathered so far is in people/\(slug)/CLAUDE.md. Existing steps for this complaint are under people/\(slug)/hypotheses/ with complaintId \(complaint.id)."
-
-        let run = baseRun(prompt: prompt, policy: .readWrite, resume: nil)
-        var full = ""
-        for await event in ClaudeEngine.stream(run) {
-            switch event {
-            case .toolUse(let n, let input):
-                let label = Self.traceLabel(n, input)
-                if nextStepsTrace.last != label { nextStepsTrace.append(label) }
-            case .textDelta(let t): full += t
-            case .finished(let t, _, _, _): if !t.isEmpty { full = t }
-            default: break
-            }
-        }
-        if let a = ProtocolParser.parse(full).alert { urgentBanner = a }   // defense in depth
-        reload()
-    }
-
-    func resolveComplaint(_ c: Complaint) {
-        var u = c; u.status = "resolved"; persistComplaint(u)
-        if let i = complaints.firstIndex(where: { $0.id == c.id }) { complaints[i] = u }
-    }
-
-    func deleteComplaint(_ c: Complaint) {
-        try? FileManager.default.removeItem(at: vault.complaintsDir(c.personId).appendingPathComponent(c.id, isDirectory: true))
-        complaints.removeAll { $0.id == c.id }
+        await generateHypotheses(trigger: "the user just answered a history question — use it as confirmed primary history to form a sharper next step, and never re-ask it")
     }
 
     // MARK: - Files & center tabs
@@ -1515,7 +1438,7 @@ final class AppState {
         try? fm.removeItem(at: claudeProjectDir)
 
         // 3. Reset in-memory state to defaults.
-        people = []; documents = []; hypotheses = []; chats = []; complaints = []; displayName = ""
+        people = []; documents = []; hypotheses = []; chats = []; displayName = ""
         openTabs = [.home]; activeTab = .home; openFileDocs = [:]
         pendingChatDraft = ""; pendingReferences = []
         toast = nil; showSettings = false

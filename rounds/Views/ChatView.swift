@@ -215,7 +215,13 @@ struct ChatView: View {
                     }
 
                     if app.isStreaming {
-                        ResearchTrace(steps: app.currentTrace, statusLine: app.statusLine, tokens: app.currentTokens)
+                        // A multi-step pipeline shows the green phase timeline; a plain turn keeps the
+                        // simple tool trace. (Phases fall back to the trace until the first one lands.)
+                        if !app.currentPhases.isEmpty {
+                            PhaseTimeline(phases: app.currentPhases, live: true)
+                        } else {
+                            ResearchTrace(steps: app.currentTrace, statusLine: app.statusLine, tokens: app.currentTokens)
+                        }
                         if !app.liveText.isEmpty {
                             MessageRow(message: ChatMessage(id: "live", role: .assistant, text: app.liveText + " ▍", timestamp: Date()))
                         }
@@ -263,6 +269,7 @@ private struct AtBottomKey: PreferenceKey {
 
 struct MessageRow: View {
     @Environment(AppState.self) private var app
+    @Environment(\.zoomScale) private var zoom
     let message: ChatMessage
 
     var body: some View {
@@ -278,6 +285,7 @@ struct MessageRow: View {
                     }
                     if !message.text.isEmpty {
                         Text(message.text)
+                            .zfont(.body)
                             .textSelection(.enabled)
                             .padding(.vertical, 8).padding(.horizontal, 12)
                             .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12))
@@ -292,13 +300,18 @@ struct MessageRow: View {
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 8) {
+                // The pipeline that produced this turn, kept above the answer as a collapsed timeline.
+                if !message.phases.isEmpty {
+                    PhaseTimeline(phases: message.phases)
+                }
                 // Table-free messages render as ONE selectable Text so the user can drag-select
                 // across paragraphs and copy. Table messages keep the grid renderer (per-block).
                 Group {
                     if MarkdownText.hasTable(message.text) {
                         MarkdownText(message.text)
                     } else {
-                        Text(MarkdownText.fullAttributed(message.text))
+                        Text(MarkdownText.fullAttributed(message.text, scale: zoom))
+                            .zfont(.body)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -382,6 +395,106 @@ struct CopyButton: View {
     }
 }
 
+/// The green phase timeline for a multi-step pipeline (filing, next-steps, a long research turn).
+/// A vertical green track with one labelled dot per phase: finished dots are solid green checks,
+/// the active dot (live only) shows a spinner, and the tool calls that ran under a phase appear as
+/// chips beneath its dot. Live above the streaming answer; persisted (collapsed) above a finished one.
+struct PhaseTimeline: View {
+    let phases: [PipelinePhase]
+    var live: Bool = false
+    @State private var expanded: Bool
+
+    init(phases: [PipelinePhase], live: Bool = false) {
+        self.phases = phases
+        self.live = live
+        _expanded = State(initialValue: live)   // live: open so the user watches it; finished: collapsed
+    }
+
+    /// The spinning dot: the last not-yet-done phase, but only while streaming.
+    private var activeIndex: Int? { live ? phases.lastIndex(where: { !$0.done }) : nil }
+
+    private var headerText: String {
+        if !expanded, let a = activeIndex { return phases[a].label }
+        let n = phases.count
+        return "\(n) step\(n == 1 ? "" : "s")"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {
+                HStack(spacing: 7) {
+                    if activeIndex != nil { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: "checkmark.seal.fill").zfont(.caption).foregroundStyle(Theme.accent) }
+                    Text(headerText).zfont(.caption, .medium).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").zfont(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(phases.enumerated()), id: \.element.id) { i, phase in
+                        PhaseRow(phase: phase, isActive: i == activeIndex,
+                                 isFirst: i == 0, isLast: i == phases.count - 1)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct PhaseRow: View {
+    let phase: PipelinePhase
+    let isActive: Bool
+    let isFirst: Bool
+    let isLast: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // The rail: a top connector (from the row top down to the dot), the dot, then a bottom
+            // connector that fills the rest of the row so the green line stays continuous through
+            // however tall the phase's content is.
+            VStack(spacing: 0) {
+                Rectangle().fill(isFirst ? Color.clear : Theme.accent).frame(width: 2, height: 5)
+                dot
+                Rectangle().fill(isLast ? Color.clear : Theme.accent).frame(width: 2).frame(maxHeight: .infinity)
+            }
+            .frame(width: 15)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(phase.label)
+                        .zfont(.caption, isActive ? .semibold : .regular)
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if isActive { ProgressView().controlSize(.mini) }
+                }
+                if !phase.steps.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(phase.steps.enumerated()), id: \.offset) { _, step in
+                            Text(step).zfont(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, isLast ? 0 : 11)
+        }
+    }
+
+    @ViewBuilder private var dot: some View {
+        if phase.done {
+            Image(systemName: "checkmark.circle.fill").zfont(size: 14).foregroundStyle(Theme.accent)
+        } else {
+            Circle().fill(Theme.bg).overlay(Circle().stroke(Theme.accent, lineWidth: 2)).frame(width: 13, height: 13)
+        }
+    }
+}
+
 /// A live "what the AI is doing" trace. Collapsed (default) shows just the current line;
 /// expanded shows every step.
 struct ResearchTrace: View {
@@ -461,6 +574,7 @@ struct MarkdownText: View {
                 view(for: block)
             }
         }
+        .zfont(.body)   // base font for all inline body text, so ⌘+/⌘− scales the table-message renderer too
     }
 
     @ViewBuilder private func view(for block: MDBlock) -> some View {
@@ -577,13 +691,16 @@ struct MarkdownText: View {
 
     /// The whole message as ONE AttributedString (paragraphs, headings, bullets, numbered lists,
     /// inline bold/italic, renumbered [S#]) — so a single SwiftUI Text can be drag-selected end-to-end.
-    static func fullAttributed(_ raw: String) -> AttributedString {
+    static func fullAttributed(_ raw: String, scale: CGFloat = 1) -> AttributedString {
         var out = AttributedString("")
         for (i, block) in parse(raw).enumerated() {
             if i > 0 { out += AttributedString("\n\n") }
             switch block {
             case .heading(let t):
-                var a = inline(t); a.font = .headline
+                var a = inline(t)
+                // Headings carry a baked font, so unlike the body runs they don't inherit the view's
+                // scaled `.body`. Scale them here too; at scale 1 this matches the semantic .headline.
+                a.font = scale == 1 ? .headline : .system(size: 13 * scale, weight: .semibold)
                 out += a
             case .paragraph(let t):
                 out += inline(t)

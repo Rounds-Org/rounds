@@ -41,7 +41,6 @@ nonisolated struct VaultPaths: Sendable {
 
     func personDir(_ slug: String) -> URL { peopleDir.appendingPathComponent(slug, isDirectory: true) }
     func personDocs(_ slug: String) -> URL { personDir(slug).appendingPathComponent("documents", isDirectory: true) }
-    func complaintsDir(_ slug: String) -> URL { personDir(slug).appendingPathComponent("complaints", isDirectory: true) }
 
     func ensureScaffold() throws {
         let fm = FileManager.default
@@ -103,17 +102,6 @@ nonisolated enum HypothesisKind: String, Codable, Sendable {
     case needsExam = "needs-exam" // the decisive next datum is a physical sign only a clinician can get
 }
 
-/// A symptom-first encounter the user opened (no document required). Its interview questions and
-/// next steps are Hypotheses linked back via `complaintId`. Persisted under people/<slug>/complaints/.
-nonisolated struct Complaint: Codable, Identifiable, Sendable, Hashable {
-    var id: String
-    var personId: String
-    var title: String        // short symptom label
-    var summary: String      // the user's original words
-    var status: String       // open | resolved
-    var openedAt: String     // ISO date
-}
-
 nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
     var id: String
     var title: String
@@ -126,7 +114,7 @@ nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
     var topTier: String?
     var sessionId: String?
     var body: String?
-    var complaintId: String?      // set when this step belongs to a symptom-first Complaint
+    var complaintId: String?      // legacy: linked older symptom-encounter steps (feature removed); parsed for back-compat
     // ask-user (question) steps:
     var askPlaceholder: String?   // hint text for the answer field
     var answer: String?           // the user's recorded answer (nil until answered)
@@ -160,6 +148,19 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable, Hashable {
     var timestamp: Date
     var references: [Reference] = []   // @-mentions attached to a user message (shown as chips)
     var hypotheses: [Hypothesis] = []  // next steps this assistant turn created/changed (inline cards)
+    var phases: [PipelinePhase] = []   // the multi-step pipeline that produced this turn (timeline above it)
+}
+
+/// One stage of a multi-step pipeline (document filing, next-steps generation, a long research
+/// chat turn) — rendered as a labelled dot on the green vertical timeline shown above the answer.
+/// App-seeded at the deterministic boundaries the app orchestrates, AND/OR emitted by the brain as
+/// `<phase>…</phase>` markers it writes at the start of each logical step. `steps` are the tool calls
+/// that ran under this phase (shown as chips under the dot).
+nonisolated struct PipelinePhase: Codable, Identifiable, Sendable, Hashable {
+    var id: String
+    var label: String
+    var done: Bool = false        // the active phase is the last one with done == false; all done => finished
+    var steps: [String] = []      // tool-call trace labels that ran while this phase was active
 }
 
 nonisolated struct ChatSummary: Codable, Identifiable, Sendable, Hashable {

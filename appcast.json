@@ -1,6 +1,6 @@
 {
-  "latestVersion": "1.4.5",
+  "latestVersion": "1.5.0",
   "minSupported": "1.0.0",
-  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.4.5/Rounds-1.4.5.dmg",
-  "notes": "Rounds now notifies you when a chat finishes working — but only when you're not already watching it (the app isn't in front, or you're on a different tab). Before, only an automatic next-steps update sent a notification; a finished chat turn didn't. (Notifications must be allowed for Rounds in System Settings → Notifications.)"
+  "downloadURL": "https://github.com/Rounds-Org/rounds/releases/download/v1.5.0/Rounds-1.5.0.dmg",
+  "notes": "Multi-step tasks now show a clean progress timeline. When Rounds files your documents or works out your next steps, each stage appears as a labelled step on a green timeline — instead of raw tool output. ⌘+ / ⌘− zoom now also scales the chat itself (your messages, the AI's answers, and the input box), not just the rest of the app. And the Home box always opens a chat now — the old 'concerns' symptom tracker was removed."
 }

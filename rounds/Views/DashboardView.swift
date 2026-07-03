@@ -31,8 +31,6 @@ struct DashboardView: View {
 
                 if app.checklistComplete, !starterDone { gettingStartedCard }
 
-                if !openComplaints.isEmpty { concernsSection }
-
                 nextSteps
 
                 if !app.chats.isEmpty {
@@ -59,7 +57,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.displayName.isEmpty ? "Hello" : "Hello, \(app.displayName)")
                     .zfont(.largeTitle, .semibold)
-                Text("Your health researcher. Describe a symptom, drop a document, or ask a question.")
+                Text("Your health researcher. Drop a document or ask a question.")
                     .zfont(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -79,7 +77,7 @@ struct DashboardView: View {
                 }
             }
             MentionField(text: askBinding, references: askRefsBinding,
-                         placeholder: "Describe a symptom, ask about a result, or @-reference…",
+                         placeholder: "Ask about a result, or @-reference a document…",
                          onSend: submit,
                          onRegisterTextView: { app.homeInputTextView = $0 })
             HStack(spacing: 10) {
@@ -122,15 +120,10 @@ struct DashboardView: View {
         guard !text.isEmpty else { return }
         let refs = app.homeDraftRefs
         app.homeDraft = ""; app.homeDraftRefs = []
-        // Plain symptom text (no @-references) opens a persisted Complaint + history interview;
-        // questions, references, and /-commands go to chat.
-        if refs.isEmpty, !text.hasPrefix("/"), app.looksLikeSymptom(text) {
-            app.beginComplaint(text)
-        } else {
-            let id = app.startNewChat()
-            let finalRefs = app.rehomePendingRefs(refs, toChat: id)
-            app.beginSendChat(text, references: finalRefs)
-        }
+        // Everything typed here opens a chat — the home box behaves exactly like the chat input.
+        let id = app.startNewChat()
+        let finalRefs = app.rehomePendingRefs(refs, toChat: id)
+        app.beginSendChat(text, references: finalRefs)
     }
 
     private var checklistCard: some View {
@@ -163,9 +156,6 @@ struct DashboardView: View {
             .init(icon: "bubble.left.and.text.bubble.right", title: "Answer a question from Rounds",
                   detail: "It asks the questions a good clinician would, to narrow things down.",
                   done: app.hypotheses.contains { $0.isQuestion && !($0.answer?.isEmpty ?? true) }),
-            .init(icon: "stethoscope", title: "Describe a symptom",
-                  detail: "Type how you feel — Rounds takes a history and proposes a workup.",
-                  done: !app.complaints.isEmpty || app.chats.contains { app.looksLikeSymptom($0.title) }),
             .init(icon: "person.2.fill", title: "Add a family member",
                   detail: "Keep records for parents, partner, kids — Rounds spots risks across the family (with their OK 🙂).",
                   done: app.people.contains { $0.slug != "_self" }),
@@ -203,14 +193,6 @@ struct DashboardView: View {
         .padding(16)
         .background(Theme.accentSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent.opacity(0.18)))
-    }
-
-    private var openComplaints: [Complaint] { app.complaints.filter { $0.status != "resolved" } }
-    private var concernsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Your concerns")
-            ForEach(openComplaints) { ComplaintCard(complaint: $0) }
-        }
     }
 
     private var nextSteps: some View {
@@ -303,7 +285,7 @@ struct DashboardView: View {
         ("drop.fill", "A recent blood test or lab panel"),
         ("waveform.path.ecg", "An imaging report — ultrasound, CT, MRI, X-ray"),
         ("doc.text", "A specialist's note or discharge summary"),
-        ("camera.fill", "A photo of a symptom — skin, nail, swelling"),
+        ("camera.fill", "A photo of skin, a nail, or swelling"),
     ]
     private var emptyHypotheses: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -333,7 +315,7 @@ struct DashboardView: View {
             .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
 
             Text(app.documents.isEmpty
-                 ? "Drag any of these onto the window — or describe a symptom in the box above."
+                 ? "Drag any of these onto the window — or ask a question in the box above."
                  : "Drag a new record onto the window, or ask a question above.")
                 .zfont(.caption2).foregroundStyle(.tertiary)
             if !app.documents.isEmpty {
@@ -418,52 +400,6 @@ struct UrgentBanner: View {
         }
         .padding(14)
         .background(Theme.warn, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-/// A symptom-first encounter card. Its interview questions + next steps render below in Next steps
-/// (linked by complaintId); this card is the persistent anchor with status + resolve/delete.
-struct ComplaintCard: View {
-    @Environment(AppState.self) private var app
-    let complaint: Complaint
-    private var linked: [Hypothesis] {
-        app.hypotheses.filter { $0.complaintId == complaint.id && !["superseded", "dismissed"].contains($0.status) }
-    }
-    private var openQuestions: Int { linked.filter { $0.isQuestion && ($0.answer?.isEmpty ?? true) }.count }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "stethoscope").foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(complaint.title).zfont(.headline).lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    statusLine
-                }
-                Spacer()
-                Menu {
-                    Button("Mark resolved") { app.resolveComplaint(complaint) }
-                    Button("Delete", role: .destructive) { app.deleteComplaint(complaint) }
-                } label: { Image(systemName: "ellipsis.circle").foregroundStyle(.secondary) }
-                    .menuStyle(.borderlessButton).fixedSize()
-            }
-        }
-        .padding(14)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hairline))
-    }
-
-    @ViewBuilder private var statusLine: some View {
-        if openQuestions > 0 {
-            Text("\(openQuestions) quick question\(openQuestions > 1 ? "s" : "") to answer below in Next steps")
-                .zfont(.caption).foregroundStyle(Theme.accent)
-        } else if app.identifyingNextSteps {
-            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Thinking it through…").zfont(.caption).foregroundStyle(.secondary) }
-        } else if linked.isEmpty {
-            Text("Reviewing your concern…").zfont(.caption).foregroundStyle(.secondary)
-        } else {
-            Text("Your next steps for this are below.").zfont(.caption).foregroundStyle(.secondary)
-        }
     }
 }
 

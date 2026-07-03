@@ -27,6 +27,8 @@ final class ChatRuntime: Identifiable {
     var messages: [ChatMessage] = []
     var liveText = ""
     var trace: [String] = []
+    var phases: [PipelinePhase] = []   // the live phase timeline for the current pipeline (green track)
+    private var phasesParsed = 0       // how many <phase> markers already lifted from the stream this pipeline
     var statusLine = ""
     var sources: [Source] = []
     var alert: RoundsAlert?
@@ -242,6 +244,7 @@ final class ChatRuntime: Identifiable {
         messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date(), references: references))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)   // shows in Recent immediately
         statusLine = "Thinking…"; liveText = ""; trace = []   // isStreaming is owned by runQueue across the whole drain
+        beginPipeline()   // a chat turn is its own mini-pipeline; the brain's <phase> markers fill it in
 
         ensureWarm()
         let firstTurn = (warm?.turnCount ?? 0) == 0
@@ -271,7 +274,8 @@ final class ChatRuntime: Identifiable {
             finalText = Self.claudeLoginGuidance
             app.toolPaths.loggedIn = false
         }
-        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date()))
+        finishPhases()   // stop the last dot spinning; snapshot the timeline onto the message so it persists
+        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(), phases: phases))
         if !parsed.sources.isEmpty {
             sources = parsed.sources
             Analytics.track(.ranSearch(sourceCount: parsed.sources.count, topTier: parsed.sources.first?.trustTier ?? "none"))
@@ -321,7 +325,8 @@ final class ChatRuntime: Identifiable {
         let answer = parsed.displayText.isEmpty ? liveText : parsed.displayText
         let finalText = answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Updated your next steps — they're on your dashboard." : answer
-        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date()))
+        finishPhases()
+        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(), phases: phases))
         if !parsed.sources.isEmpty { sources = parsed.sources }
         liveText = ""
         app.persistChat(id, messages, sources, sessionId, title: title)
@@ -337,6 +342,7 @@ final class ChatRuntime: Identifiable {
         defer { isStreaming = false; statusLine = ""; liveText = "" }
         let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
         if let sid, !sid.isEmpty { sessionId = sid }
+        finishPhases()   // close this leg's phases so the NEXT leg's early tools don't attach to a stale dot
         return parsed
     }
 
@@ -349,11 +355,39 @@ final class ChatRuntime: Identifiable {
         sessionId = app.chats.first { $0.id == id }?.sessionId
     }
 
-    func append(_ role: ChatRole, _ text: String) {
+    func append(_ role: ChatRole, _ text: String, phases: [PipelinePhase] = []) {
         guard !text.isEmpty else { return }
-        messages.append(ChatMessage(id: UUID().uuidString, role: role, text: text, timestamp: Date()))
+        messages.append(ChatMessage(id: UUID().uuidString, role: role, text: text, timestamp: Date(), phases: phases))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
         generateTitleIfNeeded()
+    }
+
+    // MARK: pipeline phases (the green timeline)
+
+    /// Start a fresh timeline for a new pipeline. App-orchestrated pipelines (intake, next-steps)
+    /// call this ONCE at the start and may then seed their known boundary phases; a plain chat turn
+    /// calls it at the top of runTurn. Model `<phase>` markers append to whatever is seeded.
+    func beginPipeline() { phases = []; phasesParsed = 0 }
+
+    /// Add a phase and make it the active one (the previous active phase is marked done). Deduplicates
+    /// a repeat of the current label so an app seed + an identical model marker don't double up.
+    func pushPhase(_ label: String) {
+        let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if phases.last?.label.caseInsensitiveCompare(clean) == .orderedSame { return }
+        for i in phases.indices { phases[i].done = true }
+        phases.append(PipelinePhase(id: UUID().uuidString, label: clean))
+    }
+
+    /// Mark every phase complete (call when a pipeline finishes so no dot keeps spinning).
+    func finishPhases() { for i in phases.indices { phases[i].done = true } }
+
+    /// Lift any NEW `<phase>…</phase>` markers the model has emitted so far into the timeline, live.
+    private func syncModelPhases(_ fullText: String) {
+        let labels = ProtocolParser.extractPhases(fullText)
+        guard labels.count > phasesParsed else { return }
+        for label in labels[phasesParsed...] { pushPhase(label) }
+        phasesParsed = labels.count
     }
 
     // MARK: stream consumption (per-runtime, no global state)
@@ -365,6 +399,7 @@ final class ChatRuntime: Identifiable {
         var hadError = false
         liveTokens = 0; tokenBase = 0; lastMsgTokens = 0
         trace = []; statusLine = ""; liveText = ""   // fresh turn — don't carry over the previous run's steps
+        phasesParsed = 0   // each run has its own fullText; phases already pushed stay, new markers count from 0
         for await event in stream {
             switch event {
             case .started(let s, _):
@@ -380,10 +415,15 @@ final class ChatRuntime: Identifiable {
             case .textDelta(let t):
                 fullText += t
                 liveText = ProtocolParser.stripForDisplay(fullText)
+                syncModelPhases(fullText)   // lift any new <phase> markers into the timeline, live
             case .toolUse(let n, let i):
                 let label = AppState.traceLabel(n, i)
                 statusLine = label
                 if trace.last != label { trace.append(label) }
+                // Nest the tool under the active phase (the dot's chips), if a timeline is running.
+                if let last = phases.indices.last, !phases[last].done, phases[last].steps.last != label {
+                    phases[last].steps.append(label)
+                }
             case .toolResult(let payload):
                 statusLine = "Reading sources…"
                 let c = ProtocolParser.citationsFromToolResult(payload)

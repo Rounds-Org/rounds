@@ -47,7 +47,6 @@ nonisolated enum BrainInstaller {
         try write(BrainResources.intakeBatch, to: vault.promptsDir.appendingPathComponent("intake_batch.md"))
         try write(BrainResources.hypothesesPrompt, to: vault.promptsDir.appendingPathComponent("hypotheses.md"))
         try write(BrainResources.chatPrompt, to: vault.promptsDir.appendingPathComponent("chat.md"))
-        try write(BrainResources.complaintPrompt, to: vault.promptsDir.appendingPathComponent("complaint.md"))
         try write(BrainResources.settingsJson, to: vault.brainSettings)
         try write(BrainResources.criticalValues, to: vault.criticalValues)
         try write(BrainResources.redFlagSymptoms, to: vault.brainDir.appendingPathComponent("red-flag-symptoms.json"))

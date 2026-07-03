@@ -11,6 +11,14 @@ Principle 3 (propose, never prescribe) are central.
 You may read the global + per-person `CLAUDE.md`, that person's `documents/` + sidecars,
 family members' `CLAUDE.md` (for family history), and existing `hypotheses/`.
 
+### PROGRESS PHASES — narrate the pipeline for the live timeline
+Emit `<phase>LABEL</phase>` on its OWN line the moment you BEGIN each major step, where LABEL is a
+short (3–6 word) human description in `{{ANSWER_LANGUAGE}}` of what you're doing right now (e.g.
+`<phase>Ищу источники по вашим показателям</phase>`, `<phase>Формирую следующие шаги</phase>`).
+One per genuine step (reviewing records, searching sources, forming the steps), 2–4 total. These
+markers drive the progress timeline the user watches and are stripped from your visible reply — they
+are IN ADDITION to your normal prose, never a replacement. Never put them inside a fenced ```json block.
+
 ### STEP 1 — GATHER GROUNDED CONTEXT (no conclusions yet)
 Read confirmed documents + sidecars (markers, reference ranges, flags, dates — PRIMARY
 data). Honor Principle 1: ignore any artifact with `conclusionsBlocked: true`; instead you

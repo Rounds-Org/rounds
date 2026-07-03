@@ -14,7 +14,6 @@ nonisolated struct VaultSnapshot: Sendable {
     var documents: [MedDocument] = []
     var hypotheses: [Hypothesis] = []
     var chats: [ChatSummary] = []
-    var complaints: [Complaint] = []
     var displayName: String = ""
 }
 
@@ -27,32 +26,7 @@ nonisolated enum VaultStore {
         snap.documents = loadDocuments(vault, people: snap.people)
         snap.hypotheses = loadHypotheses(vault)
         snap.chats = loadChats(vault)
-        snap.complaints = loadComplaints(vault, people: snap.people)
         return snap
-    }
-
-    // MARK: complaints (symptom-first encounters)
-
-    static func loadComplaints(_ vault: VaultPaths, people: [Person]) -> [Complaint] {
-        let fm = FileManager.default
-        var out: [Complaint] = []
-        for person in people {
-            let dir = vault.complaintsDir(person.slug)
-            let subdirs = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            for sub in subdirs where (try? sub.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                let cj = sub.appendingPathComponent("complaint.json")
-                guard let data = try? Data(contentsOf: cj),
-                      let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                out.append(Complaint(
-                    id: (o["id"] as? String) ?? sub.lastPathComponent,
-                    personId: (o["personId"] as? String) ?? person.slug,
-                    title: (o["title"] as? String) ?? "Concern",
-                    summary: (o["summary"] as? String) ?? "",
-                    status: (o["status"] as? String) ?? "open",
-                    openedAt: (o["openedAt"] as? String) ?? ""))
-            }
-        }
-        return out.sorted { $0.openedAt > $1.openedAt }
     }
 
     // MARK: people

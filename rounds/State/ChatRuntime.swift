@@ -44,11 +44,22 @@ final class ChatRuntime: Identifiable {
     var draft = ""                    // unsent input text — kept per-chat so it survives leaving/returning to the tab
     var draftReferences: [Reference] = []   // unsent @-references, likewise preserved across tab switches
     var queued: [QueuedTurn] = []     // messages typed mid-stream: grey deletable chips, sent in order once the turn ends
+    /// Evidence-maturity stage for THIS chat's research. Seeded from the chat's front-matter (or the
+    /// global default for a fresh chat). The slider in the chat input writes it; a change respawns the
+    /// warm session lazily (next turn) so the MCP tier-cap env stays in sync — never mid-stream.
+    var researchStage: RoundsResearchStage {
+        didSet {
+            guard researchStage != oldValue else { return }
+            app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
+        }
+    }
     @ObservationIgnored weak var inputTextView: ChatKeyTextView?   // live editor, for inserting voice dictation at the caret
     private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
+    private var phoneReported = ParsedTurn()   // report_* tool channels captured during a phone turn
 
     private var warm: WarmSession?
     private var warmModel: RoundsModel?
+    private var warmStage: RoundsResearchStage?
     private var task: Task<Void, Never>?
     private var titling = false
 
@@ -57,7 +68,9 @@ final class ChatRuntime: Identifiable {
         self.app = app
         self.messages = app.loadTranscript(id)
         self.sources = VaultStore.loadChatSources(id, app.vault)
-        self.sessionId = app.chats.first { $0.id == id }?.sessionId
+        let summary = app.chats.first { $0.id == id }
+        self.sessionId = summary?.sessionId
+        self.researchStage = summary?.researchStage ?? app.researchStage
     }
 
     var title: String {
@@ -141,14 +154,17 @@ final class ChatRuntime: Identifiable {
         queued.removeAll()
     }
 
-    func modelChanged() { warm?.stop(); warm = nil; warmModel = nil }
+    func modelChanged() { warm?.stop(); warm = nil; warmModel = nil; warmStage = nil }
 
     private func ensureWarm() {
-        if let w = warm, w.isAlive, warmModel == app.selectedModel { return }
+        // Respawn when the model OR the research stage changed since spawn — the stage rides the
+        // process env (ROUNDS_RESEARCH_STAGE) so it can only change at spawn time. --resume keeps
+        // full multi-turn memory across the respawn, so this is invisible to the conversation.
+        if let w = warm, w.isAlive, warmModel == app.selectedModel, warmStage == researchStage { return }
         warm?.stop()
-        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId))
+        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId, stage: researchStage))
         w.onPassive = { [weak self] event in Task { @MainActor in self?.handlePassive(event) } }
-        do { try w.start(); warm = w; warmModel = app.selectedModel } catch { warm = nil }
+        do { try w.start(); warm = w; warmModel = app.selectedModel; warmStage = researchStage } catch { warm = nil }
     }
 
     /// Toggle Claude Code Remote Control for THIS chat's live session — the VS Code mechanism:
@@ -185,10 +201,19 @@ final class ChatRuntime: Identifiable {
             }
         case .userMessage(let text):
             phoneLive = ""
+            phoneReported = ParsedTurn()
             messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: text, timestamp: Date()))
             app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
         case .textDelta(let t):
             phoneLive += t
+        case .toolUse(let n, let i):
+            // Same report_* capture as the local path — otherwise phone turns lose tool-reported
+            // sources/alert and the panel goes stale.
+            if let reported = ProtocolParser.parseReportTool(name: n, input: i) {
+                phoneReported = ProtocolParser.merge(base: phoneReported, tools: reported)
+                if !reported.sources.isEmpty { sources = reported.sources }
+                if let a = reported.alert { alert = a }
+            }
         case .finished(let text, let sid, _, _):
             if !sid.isEmpty { sessionId = sid }
             let raw = text.isEmpty ? phoneLive : text
@@ -196,7 +221,9 @@ final class ChatRuntime: Identifiable {
             // Parse a phone-driven turn the SAME way a local turn is parsed, so its sources, alert,
             // and any new next-step card are captured. Otherwise the Sources panel keeps the previous
             // turn's sources while the answer cites [n] from this turn → the mismatch the user saw.
-            let parsed = ProtocolParser.parse(raw)
+            // Tool-reported channels take precedence over any legacy JSON printed in the text.
+            let parsed = ProtocolParser.merge(base: ProtocolParser.parse(raw), tools: phoneReported)
+            phoneReported = ParsedTurn()
             let display = parsed.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ProtocolParser.stripForDisplay(raw) : parsed.displayText
             if !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -247,8 +274,9 @@ final class ChatRuntime: Identifiable {
         beginPipeline()   // a chat turn is its own mini-pipeline; the brain's <phase> markers fill it in
 
         ensureWarm()
+        let stage = researchStage
         let firstTurn = (warm?.turnCount ?? 0) == 0
-        let prompt = app.chatPrompt(msg, references: references, firstTurn: firstTurn)
+        let prompt = app.chatPrompt(msg, references: references, firstTurn: firstTurn, stage: stage)
 
         var (parsed, sid, ok): (ParsedTurn, String?, Bool)
         if let w = warm {
@@ -256,12 +284,12 @@ final class ChatRuntime: Identifiable {
             if !ok {
                 if Task.isCancelled { return }   // user hit Stop — don't cold-respawn a phantom answer
                 warm?.stop(); warm = nil
-                let cold = app.chatPrompt(msg, references: references, firstTurn: true)
-                (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId)))
+                let cold = app.chatPrompt(msg, references: references, firstTurn: true, stage: stage)
+                (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId, stage: stage)))
             }
         } else {
-            let cold = app.chatPrompt(msg, references: references, firstTurn: true)
-            (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId)))
+            let cold = app.chatPrompt(msg, references: references, firstTurn: true, stage: stage)
+            (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId, stage: stage)))
         }
 
         sessionId = warm?.sessionId ?? sid
@@ -397,6 +425,7 @@ final class ChatRuntime: Identifiable {
         var sid: String?
         var completed = false
         var hadError = false
+        var toolReported = ParsedTurn()   // channels pushed via report_* tool calls (Part B)
         liveTokens = 0; tokenBase = 0; lastMsgTokens = 0
         trace = []; statusLine = ""; liveText = ""   // fresh turn — don't carry over the previous run's steps
         phasesParsed = 0   // each run has its own fullText; phases already pushed stay, new markers count from 0
@@ -417,6 +446,14 @@ final class ChatRuntime: Identifiable {
                 liveText = ProtocolParser.stripForDisplay(fullText)
                 syncModelPhases(fullText)   // lift any new <phase> markers into the timeline, live
             case .toolUse(let n, let i):
+                // report_* tools carry channel data in their INPUT payload — capture it and update the
+                // UI live, but keep them OUT of the visible research trace (they're internal reporting).
+                if let reported = ProtocolParser.parseReportTool(name: n, input: i) {
+                    toolReported = ProtocolParser.merge(base: toolReported, tools: reported)
+                    if !reported.sources.isEmpty { sources = reported.sources }
+                    if let a = reported.alert { alert = a }
+                    continue
+                }
                 let label = AppState.traceLabel(n, i)
                 statusLine = label
                 if trace.last != label { trace.append(label) }
@@ -444,7 +481,9 @@ final class ChatRuntime: Identifiable {
                 break   // remote-control / phone-driven events are handled passively, not in a local turn
             }
         }
-        return (ProtocolParser.parse(fullText), sid, completed && !hadError)
+        // Prefer channels reported via tools this turn; fall back to any legacy JSON in the text.
+        let merged = ProtocolParser.merge(base: ProtocolParser.parse(fullText), tools: toolReported)
+        return (merged, sid, completed && !hadError)
     }
 
     private func merge(_ a: String, _ b: String) -> String {

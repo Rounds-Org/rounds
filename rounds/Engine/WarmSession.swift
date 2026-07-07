@@ -17,6 +17,8 @@ import Foundation
 
 nonisolated final class WarmSession: @unchecked Sendable {
     let model: RoundsModel
+    /// The evidence-maturity stage this process was spawned with. A change respawns the session.
+    var stage: RoundsResearchStage { config.researchStage }
     private let config: ClaudeRun
     private let proc = Process()
     private let stdinPipe = Pipe()
@@ -77,6 +79,9 @@ nonisolated final class WarmSession: @unchecked Sendable {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = config.toolPaths.path
         env["CI"] = "1"
+        // Hard-cap the evidence tiers the sources MCP returns for this warm process (1…4). A stage
+        // change respawns the warm session (see ChatRuntime.ensureWarm) so this stays in sync.
+        env["ROUNDS_RESEARCH_STAGE"] = String(config.researchStage.index)
         proc.environment = env
 
         proc.standardInput = stdinPipe

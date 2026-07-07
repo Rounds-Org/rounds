@@ -262,6 +262,39 @@ function bestTier(a, b) {
   return tierRank(a) <= tierRank(b) ? a : b;
 }
 
+// ---------------------------------------------------------------------------
+// Research stage (evidence-maturity axis). Set by Rounds via ROUNDS_RESEARCH_STAGE (1…4) on the
+// spawned `claude` process; this MCP inherits it. It HARD-CAPS which tiers literature/trials tools
+// return, so the chosen stage holds even if the model's prompt is ignored. See RoundsResearchStage.
+//   1 Standard of care · 2 Proven + recent · 3 Frontier (default) · 4 Experimental
+// ---------------------------------------------------------------------------
+const RESEARCH_STAGE = clampInt(process.env.ROUNDS_RESEARCH_STAGE, 3, 1, 4);
+const STAGE_TIERS = {
+  1: ['PRIMARY', 'T0', 'T1', 'T2'],
+  2: ['PRIMARY', 'T0', 'T1', 'T2', 'T3'],
+  3: TIER_ORDER.slice(),           // full pyramid, but early tiers get labelled (see maturityForTier)
+  4: TIER_ORDER.slice(),
+};
+const STAGE_NAME = { 1: 'Standard of care', 2: 'Proven + recent', 3: 'Frontier', 4: 'Experimental' };
+
+/// Maturity band shown in the UI: established | emerging | experimental.
+function maturityForTier(tier) {
+  if (tier === 'PRIMARY' || tier === 'T0' || tier === 'T1' || tier === 'T2') return 'established';
+  if (tier === 'T3' || tier === 'T4') return 'emerging';
+  return 'experimental'; // T5 case reports, T6 preprints/forums
+}
+
+/// One-line "how much to trust this yet" note for early evidence (null for settled tiers).
+function cautionForTier(tier) {
+  switch (tier) {
+    case 'T3': return 'Single randomized trial — promising but needs replication before it is standard of care.';
+    case 'T4': return 'Observational study — shows association, not proof of cause; confounding is possible.';
+    case 'T5': return 'Case report — one patient; hypothesis-generating only, no population evidence.';
+    case 'T6': return 'Preprint / not peer-reviewed — findings may change or fail to replicate.';
+    default: return null;
+  }
+}
+
 // Title heuristics for the MeSH-lag fallback (brand-new records have no MeSH/PubType yet).
 function tierFromTitleHeuristic(title) {
   const t = (title || '').toLowerCase();
@@ -721,23 +754,36 @@ async function tool_search_literature(args) {
     ranked = ranked.filter((c) => tierFilter.includes(c.trustTier));
   }
 
+  // Hard stage cap: never return tiers below the user's selected research stage, whatever the model asked for.
+  const stageTiers = STAGE_TIERS[RESEARCH_STAGE];
+  const beforeStage = ranked.length;
+  ranked = ranked.filter((c) => stageTiers.includes(c.trustTier));
+  const stageDropped = beforeStage - ranked.length;
+
   const top = ranked.slice(0, maxResults).map(shapeCitationOut);
 
   const note =
     top.length === 0
-      ? 'No citations matched (after ranking/filtering). Try a broader query or remove the tier filter.'
-      : `Returned ${top.length} ranked citation(s) from PubMed + Europe PMC. Retracted publications were dropped.`;
+      ? `No citations matched at research stage ${RESEARCH_STAGE} (${STAGE_NAME[RESEARCH_STAGE]}). ` +
+        (stageDropped > 0
+          ? `${stageDropped} lower-tier result(s) were withheld by the stage cap — raise the research stage to include earlier evidence.`
+          : 'Try a broader query.')
+      : `Returned ${top.length} ranked citation(s) from PubMed + Europe PMC at research stage ${RESEARCH_STAGE} (${STAGE_NAME[RESEARCH_STAGE]}). Retracted publications were dropped.` +
+        (stageDropped > 0 ? ` ${stageDropped} lower-tier result(s) were withheld by the stage cap.` : '');
 
   return {
     query,
+    researchStage: RESEARCH_STAGE,
+    researchStageName: STAGE_NAME[RESEARCH_STAGE],
     citations: top,
-    counts: { pubmed: pm.length, europepmc: epmc.length, afterDedup: merged.length, afterRank: ranked.length },
+    counts: { pubmed: pm.length, europepmc: epmc.length, afterDedup: merged.length, afterRank: beforeStage, afterStageCap: ranked.length },
     disclaimer: NCBI_DISCLAIMER,
     note,
   };
 }
 
 function shapeCitationOut(c) {
+  const maturity = maturityForTier(c.trustTier);
   return {
     id: c.id,
     source: c.source,
@@ -753,6 +799,8 @@ function shapeCitationOut(c) {
     trustScore: c.trustScore,
     concern: c.concern || false,
     whyTrusted: c.whyTrusted,
+    maturity,
+    caution: cautionForTier(c.trustTier),
   };
 }
 
@@ -762,11 +810,19 @@ function shapeCitationOut(c) {
 
 async function tool_find_trials(args) {
   const condition = String(args.condition || '').trim();
-  const status = String(args.status || 'RECRUITING').trim().toUpperCase();
+  let status = String(args.status || 'RECRUITING').trim().toUpperCase();
   const maxResults = clampInt(args.maxResults, 8, 1, 25);
 
   if (!condition) {
     return { trials: [], note: 'No condition provided.' };
+  }
+
+  // Ongoing (recruiting / not-yet-completed) trials are frontier evidence. At stages 1–2 they fall
+  // outside the selected research maturity, so only surface COMPLETED trials there.
+  let stageNote = '';
+  if (RESEARCH_STAGE <= 2 && status !== 'COMPLETED') {
+    stageNote = ` Research stage ${RESEARCH_STAGE} (${STAGE_NAME[RESEARCH_STAGE]}) excludes ongoing trials, so this was restricted to COMPLETED trials — raise the research stage to see recruiting studies.`;
+    status = 'COMPLETED';
   }
 
   const trials = [];
@@ -811,11 +867,12 @@ async function tool_find_trials(args) {
   return {
     condition,
     status,
+    researchStage: RESEARCH_STAGE,
     trials,
     note:
-      trials.length === 0
+      (trials.length === 0
         ? `No ${status} trials found for "${condition}".`
-        : `Found ${trials.length} trial(s) for "${condition}" with status ${status}.`,
+        : `Found ${trials.length} trial(s) for "${condition}" with status ${status}.`) + stageNote,
   };
 }
 
@@ -828,15 +885,22 @@ function normalizeTrial(s) {
   const contactsMod = proto.contactsLocationsModule || {};
   const nctId = idMod.nctId || '';
   const locations = Array.isArray(contactsMod.locations) ? contactsMod.locations : [];
+  const overallStatus = statusMod.overallStatus || '';
+  const completed = String(overallStatus).toUpperCase() === 'COMPLETED';
   return {
     nctId,
     title: idMod.briefTitle || idMod.officialTitle || '',
-    status: statusMod.overallStatus || '',
+    status: overallStatus,
     phase: Array.isArray(designMod.phases) ? designMod.phases.join(', ') : (designMod.phases || 'N/A'),
     conditions: Array.isArray(condMod.conditions) ? condMod.conditions : [],
     url: nctId ? `https://clinicaltrials.gov/study/${nctId}` : '',
     locationsCount: locations.length,
     countries: dedupeArr(locations.map((l) => l.country)).slice(0, 10),
+    // Trials are frontier evidence by nature — always label their maturity for the UI.
+    maturity: completed ? 'emerging' : 'experimental',
+    caution: completed
+      ? 'Completed trial — read the published results before acting; a single trial is not yet standard of care.'
+      : 'Ongoing trial — no established efficacy yet; enrollment is not a treatment recommendation.',
   };
 }
 
@@ -1084,13 +1148,126 @@ const TOOLS = [
       required: ['citations'],
     },
   },
+  // -------------------------------------------------------------------------
+  // report_* — UI channel tools. Rounds captures these tool calls' INPUT payload directly from the
+  // stream and renders it natively (sources panel, alert banner, next-step cards). Call these INSTEAD
+  // of printing rounds.* JSON blocks in your answer text — that keeps the chat clean and renders
+  // correctly over Remote Control. Each returns a trivial ack; the value is in the call itself.
+  // -------------------------------------------------------------------------
+  {
+    name: 'report_sources',
+    description:
+      'Report the FINAL curated citation list backing your answer (the ones your [S#] markers point to). ' +
+      'Rounds shows these in the Sources panel, ranked by trust. Call once, near the end of your answer. ' +
+      'Every source that is not standard-of-care MUST carry a maturity ("established"|"emerging"|"experimental") ' +
+      'and a one-line caution. Do NOT also print a rounds.sources JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sources: {
+          type: 'array',
+          description: 'Ordered citations. Each: {id:"S1", title, url, type, trustTier, year, journal, citedBy, whyTrusted, maturity, caution}.',
+          items: { type: 'object' },
+        },
+      },
+      required: ['sources'],
+    },
+  },
+  {
+    name: 'report_alert',
+    description:
+      'Raise a Principle-6 urgent alert (critical lab value, red-flag symptom). Rounds shows the alert banner. ' +
+      'Call INSTEAD of printing a rounds.alert JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        alert: { type: 'object', description: 'The alert object (same shape as the legacy rounds.alert block: title, message, severity, etc.).' },
+      },
+      required: ['alert'],
+    },
+  },
+  {
+    name: 'report_hypotheses',
+    description:
+      'Report new or revised next-step cards this turn produced. Rounds renders them as inline cards and on the ' +
+      'dashboard. Call INSTEAD of printing a rounds.hypotheses JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        hypotheses: { type: 'array', description: 'Hypothesis objects (same shape as the legacy rounds.hypotheses block).', items: { type: 'object' } },
+      },
+      required: ['hypotheses'],
+    },
+  },
+  {
+    name: 'report_step_action',
+    description:
+      'Apply a reversible change to an existing next-step card the user referenced (relanguage|done|dismiss|snooze|activate). ' +
+      'Call INSTEAD of printing a rounds.step_action JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The step/card id.' },
+        action: { type: 'string', description: 'relanguage | done | dismiss | snooze | activate' },
+        answer: { type: 'string', description: 'Optional freeform answer when the action needs one.' },
+      },
+      required: ['id', 'action'],
+    },
+  },
+  {
+    name: 'report_questions',
+    description:
+      'Surface confirm-to-continue questions to the user (e.g. before filing a document). Rounds renders the picker. ' +
+      'Call INSTEAD of printing a rounds.questions JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        questions: { type: 'array', description: 'RoundsQuestion objects (id, title, context, options[], ...).', items: { type: 'object' } },
+      },
+      required: ['questions'],
+    },
+  },
+  {
+    name: 'report_turn_meta',
+    description:
+      'Report metadata about this turn so Rounds can flag a clinical answer that shipped without sources. ' +
+      'Call INSTEAD of printing a rounds.turn_meta JSON block.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        is_clinical: { type: 'boolean', description: 'True if this turn made a clinical claim.' },
+        had_sources: { type: 'boolean', description: 'True if you retrieved sources this turn.' },
+        refused: { type: 'boolean', description: 'True if you declined to answer clinically.' },
+      },
+    },
+  },
 ];
+
+// report_* tools are pure UI side-channels: validate lightly and ack. Rounds reads the INPUT payload
+// off the stream, so the returned value is informational only.
+function tool_report_ack(kind) {
+  return (args) => {
+    const a = args || {};
+    let count = 0;
+    if (Array.isArray(a.sources)) count = a.sources.length;
+    else if (Array.isArray(a.hypotheses)) count = a.hypotheses.length;
+    else if (Array.isArray(a.questions)) count = a.questions.length;
+    else if (a.id || a.alert || a.is_clinical !== undefined) count = 1;
+    return { ok: true, kind, received: count, note: `Rounds recorded this ${kind}.` };
+  };
+}
 
 const TOOL_HANDLERS = {
   search_literature: tool_search_literature,
   find_trials: tool_find_trials,
   drug_label: tool_drug_label,
   rank_sources: tool_rank_sources,
+  report_sources: tool_report_ack('sources'),
+  report_alert: tool_report_ack('alert'),
+  report_hypotheses: tool_report_ack('hypotheses'),
+  report_step_action: tool_report_ack('step_action'),
+  report_questions: tool_report_ack('questions'),
+  report_turn_meta: tool_report_ack('turn_meta'),
 };
 
 async function callTool(name, args) {

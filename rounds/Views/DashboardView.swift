@@ -82,10 +82,13 @@ struct DashboardView: View {
                          onRegisterTextView: { app.homeInputTextView = $0 })
             HStack(spacing: 10) {
                 InputControls()
+                Divider().frame(height: 12)
+                ResearchStagePicker(stage: Binding(get: { app.researchStage }, set: { app.researchStage = $0 }))
                 Spacer()
                 VoiceInputButton()
                 homeAttachMenu
             }
+            .foregroundStyle(.primary)
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
@@ -98,7 +101,7 @@ struct DashboardView: View {
             Button { pickAndAttach(toNewChat: true) } label: { Label("Attach to a new chat", systemImage: "bubble.left") }
             Button { pickAndAttach(toNewChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
         } label: {
-            Image(systemName: "paperclip").zfont(.body).foregroundStyle(.secondary)
+            Image(systemName: "paperclip").zfont(.body, .medium).foregroundStyle(.primary)
         }
         .menuStyle(.borderlessButton).fixedSize()
         .help("Attach a document — to a new chat, or to Rounds for filing")

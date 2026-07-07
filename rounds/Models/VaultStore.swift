@@ -341,8 +341,8 @@ nonisolated enum VaultStore {
         for url in items where url.pathExtension.lowercased() == "md" {
             let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
             let id = url.deletingPathExtension().lastPathComponent
-            let (title, sid) = frontMatter(in: url)
-            chats.append(ChatSummary(id: id, title: title ?? id, hypothesisId: nil, updatedAt: mod, sessionId: sid))
+            let (title, sid, stage) = frontMatter(in: url)
+            chats.append(ChatSummary(id: id, title: title ?? id, hypothesisId: nil, updatedAt: mod, sessionId: sid, researchStage: stage))
         }
         return chats.sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -365,9 +365,9 @@ nonisolated enum VaultStore {
 
     /// Parse the chat's front-matter (title + the Claude sessionId used for --resume). Without the
     /// sessionId a reopened chat starts blank; with it the warm session resumes full memory.
-    private static func frontMatter(in url: URL) -> (title: String?, sessionId: String?) {
-        guard let s = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil) }
-        var title: String?, sid: String?
+    private static func frontMatter(in url: URL) -> (title: String?, sessionId: String?, researchStage: RoundsResearchStage?) {
+        guard let s = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil, nil) }
+        var title: String?, sid: String?, stage: RoundsResearchStage?
         for line in s.split(separator: "\n").prefix(8) {
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("title:") {
@@ -375,9 +375,12 @@ nonisolated enum VaultStore {
             } else if t.hasPrefix("sessionId:") {
                 let v = String(t.dropFirst("sessionId:".count)).trimmingCharacters(in: .whitespaces)
                 sid = v.isEmpty ? nil : v
+            } else if t.hasPrefix("researchStage:") {
+                let v = String(t.dropFirst("researchStage:".count)).trimmingCharacters(in: .whitespaces)
+                stage = RoundsResearchStage(rawValue: v)
             }
         }
-        return (title, sid)
+        return (title, sid, stage)
     }
 
     private static func firstHeading(in url: URL) -> String? {

@@ -135,6 +135,11 @@ nonisolated struct Source: Codable, Identifiable, Sendable, Hashable {
     var journal: String?
     var citedBy: Int?
     var whyTrusted: String?
+    /// Evidence-maturity band for the stage feature: "established" | "emerging" | "experimental".
+    /// Optional so older persisted sources.json files still decode.
+    var maturity: String?
+    /// One-line "how much to trust this yet" note for early (emerging/experimental) sources.
+    var caution: String?
 }
 
 // MARK: - Chat
@@ -169,6 +174,7 @@ nonisolated struct ChatSummary: Codable, Identifiable, Sendable, Hashable {
     var hypothesisId: String?
     var updatedAt: Date
     var sessionId: String?
+    var researchStage: RoundsResearchStage?   // persisted evidence-maturity stage for this chat
 }
 
 // MARK: - Question protocol (confirm-to-continue)

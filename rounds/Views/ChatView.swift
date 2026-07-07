@@ -84,10 +84,13 @@ struct ChatView: View {
                              onRegisterTextView: { rt.inputTextView = $0 })
                 HStack(spacing: 10) {
                     InputControls()
+                    Divider().frame(height: 12)
+                    ResearchStagePicker(stage: Binding(get: { rt.researchStage }, set: { rt.researchStage = $0 }))
                     Spacer()
                     VoiceInputButton()
                     attachMenu
                 }
+                .foregroundStyle(.primary)
             }
             .padding(12)
             .background(Theme.panel)
@@ -111,7 +114,7 @@ struct ChatView: View {
             Button { pickAndAttach(toChat: true) } label: { Label("Add to this chat", systemImage: "bubble.left") }
             Button { pickAndAttach(toChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
         } label: {
-            Image(systemName: "paperclip").zfont(.body).foregroundStyle(.secondary)
+            Image(systemName: "paperclip").zfont(.body, .medium).foregroundStyle(.primary)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()

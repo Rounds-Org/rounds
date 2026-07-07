@@ -109,7 +109,7 @@ struct VoiceInputButton: View {
         switch c.phase {
         case .idle:
             Button { c.micTapped() } label: {
-                Image(systemName: "mic").zfont(.body).foregroundStyle(.secondary)
+                Image(systemName: "mic").zfont(.body, .medium).foregroundStyle(.primary)
             }
             .buttonStyle(.borderless)
             .help("Voice input — dictate with OpenAI Whisper")

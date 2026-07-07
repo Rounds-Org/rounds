@@ -193,8 +193,65 @@ nonisolated enum ProtocolParser {
                           url: url, type: o["source"] as? String,
                           trustTier: (o["trustTier"] as? String) ?? (o["tier"] as? String) ?? "—",
                           year: year, journal: o["journal"] as? String, citedBy: cited,
-                          whyTrusted: o["whyTrusted"] as? String)
+                          whyTrusted: o["whyTrusted"] as? String,
+                          maturity: o["maturity"] as? String,
+                          caution: o["caution"] as? String)
         }
+    }
+
+    // MARK: - report_* tool payloads (Part B: channels reported via MCP tool calls, not JSON-in-text)
+
+    /// True for the `mcp__rounds-sources__report_*` tools whose INPUT payload Rounds captures directly.
+    static func isReportTool(_ name: String) -> Bool {
+        name.contains("report_sources") || name.contains("report_alert")
+            || name.contains("report_hypotheses") || name.contains("report_step_action")
+            || name.contains("report_questions") || name.contains("report_turn_meta")
+    }
+
+    /// Decode a `report_*` tool's input payload into a partial ParsedTurn (only the reported channel
+    /// is filled). Returns nil for a non-report tool. Mirrors the legacy JSON-block schema, so the
+    /// same tolerant decoders are reused and the two paths stay interchangeable.
+    static func parseReportTool(name: String, input: String) -> ParsedTurn? {
+        guard isReportTool(name) else { return nil }
+        var r = ParsedTurn()
+        guard let data = input.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return r }   // tolerate empty/garbled input — nothing to add
+        if name.contains("report_sources") {
+            if let arr = obj["sources"] ?? obj["rounds.sources"] { r.sources = parseSources(arr) }
+        } else if name.contains("report_alert") {
+            if let alert = decode(RoundsAlert.self, from: obj["alert"] ?? obj) { r.alert = alert }
+        } else if name.contains("report_hypotheses") {
+            if let arr = (obj["hypotheses"] as? [[String: Any]]) ?? (obj["rounds.hypotheses"] as? [[String: Any]]) {
+                r.hypotheses = arr.map { VaultStore.parseHypothesis($0) }
+            }
+        } else if name.contains("report_step_action") {
+            let items: [[String: Any]] = (obj["actions"] as? [[String: Any]]) ?? [obj]
+            for o in items {
+                if let id = o["id"] as? String, !id.isEmpty {
+                    r.stepActions.append(StepAction(id: id, action: (o["action"] as? String) ?? "relanguage",
+                                                    answer: o["answer"] as? String))
+                }
+            }
+        } else if name.contains("report_questions") {
+            if let arr = obj["questions"] { r.questions = decode([RoundsQuestion].self, from: arr) ?? [] }
+        } else if name.contains("report_turn_meta") {
+            let meta = (obj["meta"] as? [String: Any]) ?? obj
+            for (k, v) in meta { if let b = v as? Bool { r.turnMeta[k] = b } }
+        }
+        return r
+    }
+
+    /// Merge tool-reported channels over a text-parsed turn (tools take precedence when present).
+    static func merge(base: ParsedTurn, tools: ParsedTurn) -> ParsedTurn {
+        var out = base
+        if !tools.sources.isEmpty { out.sources = tools.sources }
+        if let a = tools.alert { out.alert = a }
+        if !tools.hypotheses.isEmpty { out.hypotheses = tools.hypotheses }
+        if !tools.stepActions.isEmpty { out.stepActions = tools.stepActions }
+        if !tools.questions.isEmpty { out.questions = tools.questions }
+        for (k, v) in tools.turnMeta { out.turnMeta[k] = v }
+        return out
     }
 
     // MARK: - helpers
@@ -228,7 +285,9 @@ nonisolated enum ProtocolParser {
             return Source(id: id, title: (o["title"] as? String) ?? "",
                           url: url, type: o["type"] as? String, trustTier: tier,
                           year: year, journal: o["journal"] as? String, citedBy: citedBy,
-                          whyTrusted: (o["whyTrusted"] as? String) ?? (o["why_trusted"] as? String))
+                          whyTrusted: (o["whyTrusted"] as? String) ?? (o["why_trusted"] as? String),
+                          maturity: o["maturity"] as? String,
+                          caution: o["caution"] as? String)
         }
     }
 

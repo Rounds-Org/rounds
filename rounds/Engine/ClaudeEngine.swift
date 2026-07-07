@@ -51,6 +51,81 @@ nonisolated enum RoundsEffort: String, CaseIterable, Sendable, Codable {
     }
 }
 
+/// How far out on the evidence-maturity axis the brain should reach when it researches a question.
+/// Higher stages widen the net (from settled guidelines out to preclinical/experimental work) and
+/// REQUIRE the brain to label how early each source is. `frontier` is the product default: reach for
+/// promising but not-yet-proven medicine, while flagging exactly how much to trust it. The enum is
+/// versioned in the prompt (chat.md); Swift only injects the per-turn directive below.
+nonisolated enum RoundsResearchStage: String, CaseIterable, Sendable, Codable {
+    case standard, proven, frontier, experimental
+
+    static var `default`: Self { .frontier }
+
+    /// Slider position, 1…4.
+    var index: Int {
+        switch self {
+        case .standard: 1; case .proven: 2; case .frontier: 3; case .experimental: 4
+        }
+    }
+    static func from(index: Int) -> Self {
+        allCases.first { $0.index == index } ?? .default
+    }
+
+    var displayName: String {
+        switch self {
+        case .standard: "Standard of care"
+        case .proven: "Proven + recent"
+        case .frontier: "Frontier"
+        case .experimental: "Experimental"
+        }
+    }
+    var short: String {
+        switch self {
+        case .standard: "Standard"; case .proven: "Proven"
+        case .frontier: "Frontier"; case .experimental: "Experimental"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .standard: "checkmark.seal"
+        case .proven: "chart.bar.doc.horizontal"
+        case .frontier: "chart.line.uptrend.xyaxis"
+        case .experimental: "atom"
+        }
+    }
+    /// One-line human blurb for tooltips / the active-stage description.
+    var blurb: String {
+        switch self {
+        case .standard: "Settled, high-trust: clinical guidelines and systematic reviews only."
+        case .proven: "Well-supported and current: adds recent randomized trials and meta-analyses."
+        case .frontier: "Promising but early: adds ongoing phase 2/3 trials and strong preprints — each labelled with how much to trust it."
+        case .experimental: "Speculative frontier: adds preclinical, mechanistic, phase-1 and case-report evidence, clearly flagged."
+        }
+    }
+    /// Very short "what this level includes" for the popover legend list.
+    var legend: String {
+        switch self {
+        case .standard: "Guidelines & systematic reviews only"
+        case .proven: "Adds recent randomized trials"
+        case .frontier: "Adds ongoing trials & strong preprints"
+        case .experimental: "Adds preclinical & case-report evidence"
+        }
+    }
+    /// Compact directive injected into every turn's prompt. The FULL behaviour spec lives in chat.md.
+    var turnDirective: String {
+        switch self {
+        case .standard:
+            return "Restrict sources to clinical guidelines, drug labels, and systematic reviews (tiers PRIMARY, T0–T2). Do not surface single trials, preprints, or case reports as recommendations."
+        case .proven:
+            return "Use guidelines and systematic reviews first, and you MAY add well-conducted recent randomized trials (down to T3). Avoid preprints and single observational studies as the basis for advice."
+        case .frontier:
+            return "Reach out to the research frontier: include ongoing phase 2/3 clinical trials and strong preprints (down to T5/T6) when relevant. For EVERY source that is not yet standard-of-care, state its maturity band and a one-line caution on how much to trust it. Never present early evidence as settled."
+        case .experimental:
+            return "Reach the full frontier, including preclinical, mechanistic, phase-1 and case-report evidence. Clearly flag each such source as experimental/speculative with a one-line caution; keep any concrete suggestions proportional to how thin the evidence is."
+        }
+    }
+}
+
 /// Claude Code permission mode. `bypass` runs allowed tools with no prompts (Rounds can't surface
 /// the CLI's interactive permission prompt), while `--disallowedTools` still HARD-removes Bash/Task/
 /// WebSearch — so file writes & source lookups just work, but the dangerous tools stay off.
@@ -116,6 +191,9 @@ nonisolated struct ClaudeRun: Sendable {
     var includePartial: Bool = true
     var permissionMode: RoundsPermissionMode = .bypass
     var effort: RoundsEffort = .default
+    /// Evidence-maturity window for this run. Exported to the child process as
+    /// `ROUNDS_RESEARCH_STAGE` so the `rounds-sources` MCP server can hard-cap which tiers it returns.
+    var researchStage: RoundsResearchStage = .default
 }
 
 nonisolated enum ClaudeEngine {
@@ -151,6 +229,8 @@ nonisolated enum ClaudeEngine {
             env["PATH"] = run.toolPaths.path
             // Keep telemetry quiet & non-interactive.
             env["CI"] = "1"
+            // Hard-cap the evidence tiers the sources MCP will return (1…4). Inherited by the MCP child.
+            env["ROUNDS_RESEARCH_STAGE"] = String(run.researchStage.index)
             proc.environment = env
 
             let outPipe = Pipe()

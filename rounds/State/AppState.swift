@@ -62,6 +62,16 @@ final class AppState {
         }
     }
 
+    /// Global default research stage (evidence-maturity axis). Set from the Home composer; new chats
+    /// inherit it. Persisted in the vault settings.json (like model/effort). Injected per-TURN into
+    /// the prompt, so changing it needs no process restart.
+    var researchStage: RoundsResearchStage = .default {
+        didSet {
+            guard researchStage != oldValue else { return }
+            VaultStore.writeString("researchStage", researchStage.rawValue, vault)
+        }
+    }
+
     // App-wide UI preferences (in UserDefaults so they survive a data wipe). Held on AppState — NOT
     // @AppStorage in the App struct — so a change reliably re-renders ContentView's environment.
     var appearance: String = UserDefaults.standard.string(forKey: "appearance") ?? "light" {
@@ -315,6 +325,9 @@ final class AppState {
         if let raw = VaultStore.readString("effort", vault), let e = RoundsEffort(rawValue: raw) {
             selectedEffort = e
         }
+        if let raw = VaultStore.readString("researchStage", vault), let s = RoundsResearchStage(rawValue: raw) {
+            researchStage = s
+        }
         language = VaultStore.readString("language", vault) ?? language
         customInstructions = VaultStore.readString("customInstructions", vault) ?? ""
         if let pm = VaultStore.readString("permissionMode", vault), let m = RoundsPermissionMode(rawValue: pm) {
@@ -407,7 +420,7 @@ final class AppState {
 
     // MARK: - Run helper
 
-    func baseRun(prompt: String, policy: ToolPolicy, resume: String?) -> ClaudeRun {
+    func baseRun(prompt: String, policy: ToolPolicy, resume: String?, stage: RoundsResearchStage? = nil) -> ClaudeRun {
         // Full power: fully unrestricted, like the VS Code extension in bypass mode — every tool
         // runs with no prompts (bypassPermissions + a deny-list-free settings file, no gate hook).
         // Otherwise: the safe restricted defaults.
@@ -429,12 +442,13 @@ final class AppState {
                   resumeSessionId: resume,
                   toolPaths: toolPaths,
                   permissionMode: mode,
-                  effort: selectedEffort)
+                  effort: selectedEffort,
+                  researchStage: stage ?? researchStage)
     }
 
     /// Read-only chat run config used by ChatRuntime.
-    func chatRun(prompt: String = "", resume: String? = nil) -> ClaudeRun {
-        baseRun(prompt: prompt, policy: .readOnly, resume: resume)
+    func chatRun(prompt: String = "", resume: String? = nil, stage: RoundsResearchStage? = nil) -> ClaudeRun {
+        baseRun(prompt: prompt, policy: .readOnly, resume: resume, stage: stage)
     }
 
     func stop() { activeRuntime?.stop() }
@@ -748,19 +762,25 @@ final class AppState {
         pendingChatDraft = draft
     }
 
-    func chatPrompt(_ msg: String, references: [Reference], firstTurn: Bool) -> String {
+    func chatPrompt(_ msg: String, references: [Reference], firstTurn: Bool,
+                    stage: RoundsResearchStage = .default) -> String {
         // Slash command (e.g. /help, /model, a custom skill): Rounds is a thin layer over Claude
         // Code, so pass it through RAW — no task framing — and let Claude's own command machinery
         // handle it. Our safety contract still rides along via --append-system-prompt.
         let trimmed = msg.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("/") { return msg }
         let refBlock = resolveReferences(references)
+        // Per-turn selector for the evidence-maturity axis. The FULL behaviour spec (which tiers each
+        // stage admits, how to label early sources) lives in chat.md; here we just name the stage and
+        // its one-line directive so it stays current even when the slider moves between warm turns.
+        let stageLine = "RESEARCH STAGE FOR THIS TURN: \(stage.index)/4 — \(stage.displayName). \(stage.turnDirective)"
         guard !firstTurn else {
             return BrainResources.chatPrompt
                 .replacingOccurrences(of: "{{USER_MESSAGE}}", with: msg)
                 .replacingOccurrences(of: "{{REFERENCED_DOCS}}", with: references.map { $0.label }.joined(separator: ", "))
                 .replacingOccurrences(of: "{{PERSON_SLUG}}", with: "_self")
-            + "\n\n---\nThe user's message for this turn is:\n\(msg)\(refBlock)"
+                .replacingOccurrences(of: "{{RESEARCH_STAGE}}", with: stageLine)
+            + "\n\n---\n\(stageLine)\n\nThe user's message for this turn is:\n\(msg)\(refBlock)"
         }
         // Subsequent warm turns: the rules are already in context — a compact reminder keeps
         // them salient without re-sending the whole task each turn.
@@ -768,8 +788,10 @@ final class AppState {
         Continue in the Rounds chat. The same rules still apply: make clinical claims ONLY \
         from sources you retrieve THIS turn via the rounds-sources tools; put an inline [S#] \
         on every clinically meaningful sentence; cite the user's own values as "your record"; \
-        propose, never prescribe; and emit a rounds.sources JSON block (and rounds.alert if a \
-        value is critical).
+        propose, never prescribe; and report your citations by CALLING the `report_sources` tool \
+        (and `report_alert` if a value is critical) — do NOT print a rounds.sources JSON block in \
+        your answer text.
+        \(stageLine)
         Run this as ONE ongoing case, like a senior clinician — not a fresh Q&A. Hold a single \
         evolving differential and integrate this new detail by RE-WEIGHTING it; do NOT pivot 180° to \
         whatever the latest message mentions or rebuild the diagnosis from scratch each turn (that \
@@ -784,7 +806,7 @@ final class AppState {
         data; converge on the likely cause + the ONE reversible experiment that confirms or refutes it.
         If the user wants a reversible change to a next-step card they \
         referenced (translate it to their language, mark it done/not-relevant, snooze, reactivate), \
-        just do it: emit `{ "rounds.step_action": { "id": "<step id>", "action": "relanguage|done|dismiss|snooze|activate" } }` \
+        just do it: CALL the `report_step_action` tool with `{ "id": "<step id>", "action": "relanguage|done|dismiss|snooze|activate" }` \
         and confirm in ONE short sentence — no permission menu, never claim you'll edit a file yourself.
 
         User: \(msg)\(refBlock)
@@ -795,7 +817,10 @@ final class AppState {
     func persistChat(_ chatId: String, _ msgs: [ChatMessage], _ sources: [Source], _ sessionId: String?, title titleOverride: String? = nil) {
         let title = titleOverride ?? msgs.first(where: { $0.role == .user })?.text.prefix(60).description
             ?? msgs.first(where: { $0.role != .system })?.text.prefix(60).description ?? "Chat"
-        var md = "---\ntitle: \"\(title.replacingOccurrences(of: "\"", with: "'"))\"\nsessionId: \(sessionId ?? "")\n---\n\n"
+        // Persist the chat's evidence-maturity stage so reopening restores the slider (falls back to
+        // the global default when absent). Read from the live runtime — do NOT change the sessionId key.
+        let stage = chatRuntimes[chatId]?.researchStage ?? researchStage
+        var md = "---\ntitle: \"\(title.replacingOccurrences(of: "\"", with: "'"))\"\nsessionId: \(sessionId ?? "")\nresearchStage: \(stage.rawValue)\n---\n\n"
         // Sentinel delimiter (an HTML comment) so an assistant message containing a markdown
         // "## heading" can't be mistaken for a message boundary and truncated on reload.
         for m in msgs {

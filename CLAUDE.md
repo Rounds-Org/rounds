@@ -191,3 +191,8 @@ There are currently NO Rounds-native intercepted slash commands — every `/`-pr
 
 `notifyFinishedIfAway()` must fire ONLY when `!(NSApp.isActive && app.activeChatTab == id)`. Do NOT notify if the user is already on that chat tab with the app frontmost — it's noise. Also skip any chat whose `id` starts with `nextsteps-`; those chats send their own "updated your next steps" notification via a separate path.
 <!-- auto-added 2026-07-02 -->
+
+## Hypothesis status changes must be deterministic — never ask the LLM
+
+Do NOT route done/dismiss/snooze/activate status changes through the brain. Call `app.setHypothesisStatusLocally(id, status)` (updates `AppState.hypotheses` in-memory + writes via `VaultStore.setHypothesisStatus`). The LLM path is flaky and caused Home to stay out of sync with what the chat confirmed was resolved. The "Mark as resolved" button in `HypothesisCard` must appear ONLY in the expanded state (beside the large "Chat about this" button), not in the collapsed card.
+<!-- auto-added 2026-07-10 -->

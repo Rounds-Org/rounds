@@ -284,6 +284,58 @@ nonisolated enum VaultStore {
         try? md.data(using: .utf8)?.write(to: dir.appendingPathComponent("hypothesis.md"))
     }
 
+    /// Deterministically set a hypothesis's `status` in place — no LLM round-trip. Locates the
+    /// existing `hypothesis.json` by id in either container (top-level or per-person), rewrites only
+    /// `status`, and best-effort updates the md front-matter. Returns true if a file was updated.
+    /// This is the reliable path for resolve/dismiss so the Home list can't drift from the files.
+    @discardableResult
+    static func setHypothesisStatus(_ id: String, _ status: String, _ vault: VaultPaths) -> Bool {
+        let fm = FileManager.default
+        var containers: [URL] = [vault.hypothesesDir]
+        let peopleDirs = (try? fm.contentsOfDirectory(at: vault.peopleDir, includingPropertiesForKeys: nil)) ?? []
+        for p in peopleDirs { containers.append(p.appendingPathComponent("hypotheses", isDirectory: true)) }
+
+        for container in containers {
+            let dirs = (try? fm.contentsOfDirectory(at: container, includingPropertiesForKeys: nil)) ?? []
+            for dir in dirs {
+                let hj = dir.appendingPathComponent("hypothesis.json")
+                guard let data = try? Data(contentsOf: hj),
+                      var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (obj["id"] as? String) == id
+                else { continue }
+                obj["status"] = status
+                if let out = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
+                    try? out.write(to: hj)
+                }
+                let mdURL = dir.appendingPathComponent("hypothesis.md")
+                if let md = try? String(contentsOf: mdURL, encoding: .utf8) {
+                    try? replaceFrontMatterStatus(md, status).data(using: .utf8)?.write(to: mdURL)
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Replace a `status:` line inside the leading `---` front-matter block, if present (cosmetic —
+    /// the JSON is the source of truth for `status`).
+    private static func replaceFrontMatterStatus(_ md: String, _ status: String) -> String {
+        guard md.hasPrefix("---") else { return md }
+        var lines = md.components(separatedBy: "\n")
+        var inFM = false
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if i == 0 && t == "---" { inFM = true; continue }
+            if inFM && t == "---" { break }
+            if inFM && t.hasPrefix("status:") {
+                let indent = String(line.prefix(while: { $0 == " " }))
+                lines[i] = "\(indent)status: \(status)"
+                break
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     static func parseHypothesis(_ obj: [String: Any]) -> Hypothesis {
         let sc: Int = {
             if let i = obj["sourceCount"] as? Int { return i }

@@ -15,6 +15,7 @@ struct DashboardView: View {
     private var askBinding: Binding<String> { Binding(get: { app.homeDraft }, set: { app.homeDraft = $0 }) }
     private var askRefsBinding: Binding<[Reference]> { Binding(get: { app.homeDraftRefs }, set: { app.homeDraftRefs = $0 }) }
     @State private var stepPersonFilter: String?   // nil = everyone
+    @State private var collapsedPeople: Set<String> = []   // person groups collapsed in Next steps
 
     var body: some View {
         ScrollView {
@@ -247,9 +248,58 @@ struct DashboardView: View {
                     emptyHypotheses
                 }
             } else {
-                ForEach(activeHypotheses) { HypothesisCard(hyp: $0) }
+                ForEach(groupedHypotheses, id: \.slug) { group in
+                    VStack(alignment: .leading, spacing: 10) {
+                        if showGroupHeaders {
+                            Button { withAnimation { toggleCollapse(group.slug) } } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: collapsedPeople.contains(group.slug) ? "chevron.right" : "chevron.down")
+                                        .zfont(.caption2).foregroundStyle(.secondary)
+                                    Text(groupName(group.slug) ?? "You").zfont(.caption, .semibold).foregroundStyle(.secondary)
+                                    Text("\(group.hyps.count)").zfont(.caption2).foregroundStyle(.tertiary)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain).linkCursor()
+                        }
+                        if !collapsedPeople.contains(group.slug) {
+                            ForEach(group.hyps) { HypothesisCard(hyp: $0).transition(.opacity) }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    // MARK: next-steps grouping (by person; the person with the newest card shows first)
+
+    /// Extract the yyyy-mm-dd embedded in a hypothesis id (ids look like `hyp_2026-06-21_slug`).
+    private func hypDate(_ h: Hypothesis) -> String {
+        if let r = h.id.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) { return String(h.id[r]) }
+        return ""
+    }
+    /// Display name for a person group header (nil → render as "You").
+    private func groupName(_ slug: String) -> String? {
+        if slug == "_self" { return "You" }
+        let p = app.people.first { $0.slug == slug }
+        let name = p?.displayName ?? slug
+        if let rel = p?.relationship, rel != "self" { return "\(name) · \(rel)" }
+        return name
+    }
+    private var groupedHypotheses: [(slug: String, hyps: [Hypothesis])] {
+        Dictionary(grouping: activeHypotheses, by: { $0.personId })
+            .map { (slug: $0.key, hyps: $0.value) }
+            .sorted { a, b in
+                let da = a.hyps.map(hypDate).max() ?? "", db = b.hyps.map(hypDate).max() ?? ""
+                if da != db { return da > db }                 // newest-card person first
+                if (a.slug == "_self") != (b.slug == "_self") { return a.slug == "_self" }  // then You
+                return a.slug < b.slug
+            }
+    }
+    private var showGroupHeaders: Bool { groupedHypotheses.count > 1 }
+    private func toggleCollapse(_ slug: String) {
+        if collapsedPeople.contains(slug) { collapsedPeople.remove(slug) } else { collapsedPeople.insert(slug) }
     }
 
     private var archivedSet: Set<String> { ["superseded", "done", "dismissed"] }
@@ -517,20 +567,13 @@ struct HypothesisCard: View {
     private var actionBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    if let person = personLabel {
-                        Label(person, systemImage: "person")
-                            .zfont(.caption2).foregroundStyle(Theme.accent)
-                    }
-                    Text(hyp.title).zfont(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .contentShape(Rectangle())
-                        .onTapGesture { withAnimation { expanded.toggle() } }   // tap the title to open, like Details
-                    Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                Spacer()
+                // Compact, Linear-style: just the title collapsed; the "why now" description shows
+                // only in the expanded (full) view below.
+                Text(hyp.title).zfont(.subheadline, .medium)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation { expanded.toggle() } }   // tap the title to open, like Details
                 Pill(text: hyp.priority, color: priorityColor)
             }
             HStack(spacing: 8) {
@@ -543,6 +586,9 @@ struct HypothesisCard: View {
                     .zfont(.caption, .medium).buttonStyle(.borderless).tint(Theme.accent)
             }
             if expanded {
+                Text(hyp.whyNow).zfont(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 if let body = hyp.body {
                     Divider()
                     let clean = stripFrontMatter(body)
@@ -570,6 +616,14 @@ struct HypothesisCard: View {
                     }
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent).tint(Theme.accent)
+                    // Resolve lives here — only in the open card, beside the big Chat button. Fades out.
+                    Button { app.resolveHypothesis(hyp) } label: {
+                        Label("Mark as resolved", systemImage: "checkmark.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered).tint(.secondary)
+                    .help("Mark this next step done — moves it to Archived.")
                 }
                 .padding(.top, 4)
             }

@@ -17,6 +17,11 @@ struct OnboardingView: View {
     @State private var notifGranted = false
     @State private var notifAsked = false
 
+    // Alpha gate (first thing shown): must acknowledge before the slides.
+    @State private var acceptedAlpha = false
+    @State private var triedStar = false
+    @State private var starError = false
+
     // About you
     @State private var name = ""
     @State private var smoking = ""
@@ -40,6 +45,60 @@ struct OnboardingView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if !acceptedAlpha {
+                alphaGate
+            } else {
+                slides
+                footer
+            }
+        }
+        .frame(width: 600)
+        .background(Theme.bg)
+    }
+
+    // MARK: alpha gate — honest "this is early" note + a nudge to star the repo, gated by a checkbox
+
+    private var alphaGate: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 8)
+            Image(systemName: "hammer.fill").zfont(size: 38).foregroundStyle(Theme.accent)
+            VStack(spacing: 10) {
+                Text("Rounds is in Alpha").zfont(.largeTitle, .bold)
+                Text("Not even beta yet — it's early, rough in places, and not finished. But it's free and fully open-source. Let's build a genuinely great medical-research tool for people, together.")
+                    .zfont(.title3).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 46)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Link(destination: URL(string: "https://github.com/Rounds-Org/rounds")!) {
+                Label("Star Rounds on GitHub", systemImage: "star.fill").frame(maxWidth: 280)
+            }
+            .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
+            VStack(spacing: 6) {
+                Toggle(isOn: $triedStar) {
+                    Text("I tried to give it a star ⭐️ on GitHub").zfont(.callout)
+                }
+                .toggleStyle(.checkbox)
+                if starError && !triedStar {
+                    Text("Please check this to continue — it's required.")
+                        .zfont(.caption).foregroundStyle(Theme.warn)
+                }
+            }
+            Spacer(minLength: 8)
+            HStack {
+                Spacer()
+                Button("Continue") {
+                    if triedStar { withAnimation { acceptedAlpha = true } } else { starError = true }
+                }
+                .buttonStyle(.borderedProminent).tint(Theme.accent)
+            }
+            .padding(.horizontal, 18)
+        }
+        .padding(.top, 20).padding(.bottom, 14)
+        .frame(height: 520)
+    }
+
+    private var slides: some View {
         VStack(spacing: 0) {
             TabView(selection: $page) {
                 welcomeSlide.tag(0)
@@ -71,11 +130,7 @@ struct OnboardingView: View {
             }
             .tabViewStyle(.automatic)
             .frame(height: 460)
-
-            footer
         }
-        .frame(width: 600)
-        .background(Theme.bg)
     }
 
     // MARK: welcome

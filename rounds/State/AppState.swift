@@ -1295,6 +1295,30 @@ final class AppState {
     /// Apply reversible changes the chat brain requested for existing next-step cards
     /// (translate into the user's language, or change status). Runs in the background lane —
     /// chat is read-only, so the APP performs these writes in a controlled pass.
+    /// Canonical status for a step-action verb (nil = not a status change).
+    private func statusForAction(_ action: String) -> String? {
+        switch action.lowercased() {
+        case "done", "resolved": return "done"
+        case "dismiss", "dismissed", "not-relevant", "irrelevant", "no-longer-relevant": return "dismissed"
+        case "snooze", "snoozed": return "snoozed"
+        case "activate", "active": return "active"
+        default: return nil
+        }
+    }
+
+    /// Set a step's status DETERMINISTICALLY (in-memory + on disk, no LLM). This is what keeps Home
+    /// in sync with a resolve done from chat — the old path asked Claude to edit the files, which was
+    /// flaky, so a card resolved in chat could linger on Home. Animated so the card fades out.
+    func setHypothesisStatusLocally(_ id: String, _ status: String) {
+        withAnimation(.easeInOut(duration: 0.32)) {
+            if let i = hypotheses.firstIndex(where: { $0.id == id }) { hypotheses[i].status = status }
+        }
+        VaultStore.setHypothesisStatus(id, status, vault)
+    }
+
+    /// Resolve a next-step card (Home "Mark as resolved" button).
+    func resolveHypothesis(_ hyp: Hypothesis) { setHypothesisStatusLocally(hyp.id, "done") }
+
     func applyStepActions(_ actions: [StepAction]) async {
         // "answer" actions (a history answer to an ask-user step) go through the question loop.
         for a in actions where a.action.lowercased() == "answer" && !a.id.isEmpty {
@@ -1302,17 +1326,18 @@ final class AppState {
                 await answerQuestionStep(h, answer: ans)
             }
         }
+        // Status changes (done/dismiss/snooze/activate) are applied DETERMINISTICALLY here — no LLM —
+        // so a resolve from chat instantly updates Home and can't drift from the files.
+        for a in actions where !a.id.isEmpty {
+            if let st = statusForAction(a.action) { setHypothesisStatusLocally(a.id, st) }
+        }
+        // Only a relanguage/translate rewrite still needs the brain (it edits the card's content).
         let lang = answerLanguageDescriptor
         var instr: [String] = []
-        for a in actions where !a.id.isEmpty && a.action.lowercased() != "answer" {
+        for a in actions where !a.id.isEmpty {
             switch a.action.lowercased() {
             case "relanguage", "translate", "language":
                 instr.append("• Step \(a.id): rewrite its hypothesis.md body, `title`, and `whyNow` into \(lang). Preserve every number, unit, date, marker name, drug name, status, source, and [S#] citation exactly, and keep the same id. This is a translation/rewrite, NOT a re-analysis — do not change the meaning, the sources, or the conclusion.")
-            case "done", "resolved": instr.append("• Step \(a.id): set its status to \"done\" (keep the file).")
-            case "dismiss", "dismissed", "not-relevant", "irrelevant", "no-longer-relevant":
-                instr.append("• Step \(a.id): set its status to \"dismissed\" (keep the file).")
-            case "snooze", "snoozed": instr.append("• Step \(a.id): set its status to \"snoozed\" (keep the file).")
-            case "activate", "active": instr.append("• Step \(a.id): set its status to \"active\" (keep the file).")
             default: continue
             }
         }

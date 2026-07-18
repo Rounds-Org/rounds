@@ -254,6 +254,27 @@ final class ChatRuntime: Identifiable {
             || (t.contains("authentication") && t.contains("error"))
     }
 
+    /// A leading decline ("I can't help with that…") rather than a real answer. This detects the model
+    /// OVER-refusing a legitimate personal-health question — a measured failure mode of the current
+    /// model on mechanism / rare-disease content (arXiv:2607.10849). It is DISTINCT from the honest
+    /// evidence-tier refusal the contract calls success: that path calls `report_turn_meta`, so the
+    /// caller gates this on `turnMeta.isEmpty` (see runTurn). Prefix-shaped — a refusal leads with the
+    /// decline, so inspect only the head; a mid-body "I can't be certain without imaging" hedge inside a
+    /// real answer must NOT trip it.
+    static func looksLikeRefusal(_ s: String) -> Bool {
+        let head = s.prefix(240).lowercased()
+        let declines = [
+            "i can't help", "i cannot help", "i can't assist", "i cannot assist",
+            "i'm not able to help", "i'm unable to help", "i can't provide", "i cannot provide",
+            "i can't answer", "i cannot answer", "i'm not able to answer", "i won't be able to",
+            "i can't engage", "i'm not comfortable", "i can't in good conscience",
+            "i'm sorry, but i can't", "i'm sorry, but i cannot",
+            "i apologize, but i can't", "i apologize, but i cannot",
+            "i'm not going to", "this isn't something i can", "i'd rather not get into",
+        ]
+        return declines.contains { head.contains($0) }
+    }
+
     /// Shown in place of that failure: clear, correct steps. Sign-in must happen in a real terminal
     /// because Rounds runs Claude Code non-interactively (no TTY / browser flow for /login).
     static let claudeLoginGuidance = """
@@ -313,6 +334,17 @@ final class ChatRuntime: Identifiable {
         sourcesWarning = (clinical && parsed.sources.isEmpty && !refused)
             ? "This answer was marked clinical but came without sources. Treat it with caution and confirm with a clinician."
             : nil
+        // Distinguish an OVER-refusal (the model declined a legitimate question up front — no search, no
+        // sources, no report_turn_meta) from the honest evidence-tier refusal the contract calls success
+        // (that path is REQUIRED to call report_turn_meta, so turnMeta is non-empty). Measure the rate
+        // with enum-only telemetry; no reframe/retry yet — see the arXiv digest research (measure first).
+        let overRefusal = Self.looksLikeRefusal(finalText)
+            && parsed.sources.isEmpty
+            && parsed.alert == nil
+            && parsed.turnMeta.isEmpty
+            && !Self.looksLikeClaudeAuthError(finalText)
+        Analytics.track(.turnCompleted(refusal: overRefusal ? "over" : (refused ? "evidence" : "none"),
+                                       retried: false, recovered: false))
         liveText = ""
         // The chat surfaced a NEW or revised next step — the app persists it (chat is read-only) so
         // it shows on the dashboard, and we attach it to this message so it renders inline as a card.

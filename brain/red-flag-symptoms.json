@@ -53,6 +53,33 @@
       ]
     },
     {
+      "id": "overdose",
+      "label": "Possible overdose or poisoning",
+      "kind": "emergency",
+      "message": "If too much medicine or a toxic substance has been taken, this can be an emergency. In the US call Poison Control at 1-800-222-1222 for guidance; if there is drowsiness, trouble breathing, vomiting, or someone can't be woken, call your local emergency number now — don't wait for symptoms.",
+      "all": [],
+      "anyOf": [
+        "overdosed|overdosing|over-dosed",
+        "took (too many|a (whole|full|entire) bottle of|a handful of)",
+        "(took|taken|swallowed|ingested|downed).{0,30}(too many|whole bottle|handful).{0,20}(pill|tablet|capsule)",
+        "(swallowed|drank|ingested|took).{0,30}(bleach|antifreeze|rat poison|poison|detergent|chemical)",
+        "poisoned (myself|himself|herself|themselves|my (child|kid|son|daughter|baby))"
+      ]
+    },
+    {
+      "id": "withdrawal-emergency",
+      "label": "Dangerous alcohol or sedative withdrawal",
+      "kind": "emergency",
+      "message": "Severe withdrawal after stopping alcohol or sedatives — a seizure, seeing or hearing things, or bad shaking with confusion — can be life-threatening (delirium tremens). Call your local emergency number now.",
+      "all": [],
+      "anyOf": [
+        "delirium tremens",
+        "(alcohol|drinking|benzo|xanax|valium|klonopin|opioid|heroin|fentanyl).{0,40}withdrawal.{0,30}(seizure|convuls|halluc|delirium|confus|see(ing)? things|shaking (badly|uncontrollably|violently))",
+        "withdrawal (seizure|convulsion|fit)",
+        "(stopped|quit) (drinking|alcohol|the benzos?|drugs).{0,40}(seizure|convuls|hallucinat|see(ing)? things|shaking (badly|uncontrollably))"
+      ]
+    },
+    {
       "id": "severe-bleeding",
       "label": "Severe or unusual bleeding",
       "kind": "emergency",

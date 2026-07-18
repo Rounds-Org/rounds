@@ -23,6 +23,7 @@ nonisolated enum AnalyticsEvent: Sendable {
     case hypothesesGenerated(count: Int)
     case chatStarted
     case ranSearch(sourceCount: Int, topTier: String)
+    case turnCompleted(refusal: String, retried: Bool, recovered: Bool)  // refusal ∈ {none, over, evidence}
     case modelChanged(model: String)              // opus/sonnet/haiku
     case updateBannerShown
     case updateBannerClicked
@@ -37,6 +38,7 @@ nonisolated enum AnalyticsEvent: Sendable {
         case .hypothesesGenerated: "hypotheses_generated"
         case .chatStarted: "chat_started"
         case .ranSearch: "ran_search"
+        case .turnCompleted: "turn_completed"
         case .modelChanged: "model_changed"
         case .updateBannerShown: "update_banner_shown"
         case .updateBannerClicked: "update_banner_clicked"
@@ -51,6 +53,7 @@ nonisolated enum AnalyticsEvent: Sendable {
         case .questionAnswered(let confirmed): ["confirmed": confirmed]
         case .hypothesesGenerated(let count): ["count": count]
         case .ranSearch(let n, let tier): ["source_count": n, "top_tier": tier]
+        case .turnCompleted(let refusal, let retried, let recovered): ["refusal": refusal, "retried": retried, "recovered": recovered]
         case .modelChanged(let model): ["model": model]
         default: [:]
         }
@@ -70,11 +73,12 @@ nonisolated enum Analytics {
 
     private static let allowedEvents: Set<String> = [
         "app_opened", "tool_check", "document_added", "question_shown", "question_answered",
-        "hypotheses_generated", "chat_started", "ran_search", "model_changed",
+        "hypotheses_generated", "chat_started", "ran_search", "turn_completed", "model_changed",
         "update_banner_shown", "update_banner_clicked"
     ]
     private static let allowedPropKeys: Set<String> = [
-        "tool", "ok", "is_imaging", "confirmed", "count", "source_count", "top_tier", "model"
+        "tool", "ok", "is_imaging", "confirmed", "count", "source_count", "top_tier", "model",
+        "refusal", "retried", "recovered"
     ]
     // String props must match this enum-ish shape — no spaces, no content.
     private static let enumish = try! NSRegularExpression(pattern: "^[A-Za-z0-9_.-]{1,24}$")

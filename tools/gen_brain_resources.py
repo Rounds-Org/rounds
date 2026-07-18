@@ -45,7 +45,7 @@ def emit():
         "import Foundation",
         "",
         "nonisolated enum BrainResources {",
-        '    static let brainVersion = "1.1.0"',
+        '    static let brainVersion = "1.3.0"',
         "",
     ]
     for name, rel, placeholder in FILES:

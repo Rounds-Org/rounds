@@ -985,6 +985,219 @@ function joinField(v) {
 }
 
 // ---------------------------------------------------------------------------
+// Tool: dose_check — DETERMINISTIC OTC dose arithmetic (never let the model do it)
+//
+// LLMs are provably bad at rolling-24h dose math and confidently wrong about it
+// (DOSEBENCH arXiv:2606.04262: best model 55.6% accurate at 91.5% self-confidence).
+// So the model only EXTRACTS dose events; every sum, interval, and verdict is
+// computed here in pure Node against a bundled FDA OTC-monograph limits table
+// (openFDA's dosage_and_administration is free-text prose with no structured max).
+// Rx and pediatric weight-based dosing are refused (out_of_scope), never guessed.
+// ---------------------------------------------------------------------------
+
+const MS_PER_HOUR = 3600 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+// Adult OTC ceilings from the public-domain FDA OTC Drug Facts monographs. Keyed by
+// canonical active ingredient. These few numbers are stable; refresh on a monograph change.
+const OTC_DOSE_TABLE = {
+  acetaminophen: {
+    max_daily_mg: 4000, min_interval_hours: 4, max_single_mg: 1000,
+    source: 'FDA OTC Drug Facts monograph (adult acetaminophen)',
+    brand_note: 'Some brands voluntarily label a lower 3000–3250 mg/day cap; 4000 mg is the monograph maximum. Chronic use or alcohol lowers the safe ceiling.',
+    synonyms: ['acetaminophen', 'paracetamol', 'tylenol', 'apap', 'panadol', 'mapap', 'feverall', 'tempra'],
+  },
+  ibuprofen: {
+    max_daily_mg: 1200, min_interval_hours: 4, max_single_mg: 400,
+    source: 'FDA OTC Drug Facts monograph (adult ibuprofen, OTC self-care ceiling)',
+    brand_note: 'OTC self-care ceiling is 1200 mg/day; higher (up to 3200 mg/day) is prescription-only and clinician-supervised.',
+    synonyms: ['ibuprofen', 'advil', 'motrin', 'nurofen', 'brufen', 'midol ib'],
+  },
+  naproxen: {
+    max_daily_mg: 660, min_interval_hours: 8, max_single_mg: 220,
+    source: 'FDA OTC Drug Facts monograph (adult naproxen sodium, OTC)',
+    brand_note: 'OTC ceiling is 660 mg/day naproxen sodium (220 mg every 8–12h); prescription doses are higher.',
+    synonyms: ['naproxen', 'naproxen sodium', 'aleve', 'naprosyn', 'anaprox'],
+  },
+  aspirin: {
+    max_daily_mg: 4000, min_interval_hours: 4, max_single_mg: 1000,
+    source: 'FDA OTC Drug Facts monograph (adult analgesic aspirin)',
+    brand_note: 'Analgesic OTC ceiling is ~4000 mg/day. Low-dose cardioprotective aspirin (75–100 mg daily) is a SEPARATE regimen — this tool does not evaluate it.',
+    synonyms: ['aspirin', 'acetylsalicylic acid', 'asa', 'bayer aspirin', 'ecotrin', 'bufferin'],
+  },
+};
+
+// OTC combination brands that hide an analgesic — the #1 real-world accidental-overdose path.
+// Maps a brand cue → the hidden ingredient we compute against, flagging the duplicate risk.
+const OTC_COMBO_HIDDEN = {
+  nyquil: 'acetaminophen', dayquil: 'acetaminophen', theraflu: 'acetaminophen',
+  'tylenol pm': 'acetaminophen', 'tylenol cold': 'acetaminophen', 'tylenol sinus': 'acetaminophen',
+  excedrin: 'acetaminophen', mucinex: 'acetaminophen', robitussin: 'acetaminophen',
+  sudafed: 'acetaminophen', 'advil pm': 'ibuprofen', 'advil cold': 'ibuprofen',
+};
+
+const DOSE_DISCLAIMER =
+  'Dose limits are the adult FDA OTC-monograph ceilings, not personalized medical advice. ' +
+  'Lower limits apply with liver/kidney disease, alcohol use, low body weight, or other medicines — ' +
+  'when unsure, ask a pharmacist. This tool does not evaluate prescription or weight-based pediatric dosing.';
+
+function resolveIngredient(drugRaw) {
+  const d = String(drugRaw || '').trim().toLowerCase();
+  if (!d) return { matched: false };
+  // 1) Direct ingredient/brand synonym match.
+  for (const [ingredient, spec] of Object.entries(OTC_DOSE_TABLE)) {
+    if (spec.synonyms.some((s) => d === s || d.includes(s))) {
+      return { matched: true, ingredient, combination: false };
+    }
+  }
+  // 2) Combination brand hiding an analgesic.
+  for (const [cue, ingredient] of Object.entries(OTC_COMBO_HIDDEN)) {
+    if (d.includes(cue)) {
+      return { matched: true, ingredient, combination: true, comboBrand: cue };
+    }
+  }
+  return { matched: false };
+}
+
+// Parse a dose time: an integer "minutes ago" (string or number), or an ISO-8601 string.
+// The minutes-ago check MUST come first: V8's Date.parse("360") misreads a bare integer as
+// the year 360, so a numeric "minutes ago" value would silently become an ancient timestamp.
+function parseDoseAt(at, nowMs) {
+  if (at === null || at === undefined || at === '') return NaN;
+  if (typeof at === 'number' || (typeof at === 'string' && /^-?\d+(\.\d+)?$/.test(at.trim()))) {
+    const mins = Number(at);
+    return Number.isFinite(mins) ? nowMs - mins * 60 * 1000 : NaN; // minutes-ago
+  }
+  const iso = Date.parse(at);
+  return Number.isFinite(iso) ? iso : NaN;
+}
+
+function tool_dose_check(args) {
+  const a = args || {};
+  const nowMs = a.now ? Date.parse(a.now) : Date.now();
+  const drugRaw = String(a.drug || '').trim();
+
+  // --- out-of-scope guards (refuse, never guess) ---
+  if (!drugRaw) {
+    return { verdict: 'out_of_scope', reason: 'no_drug', message: 'No drug name was provided.', disclaimer: DOSE_DISCLAIMER };
+  }
+  const age = a.patient_age_years !== undefined ? Number(a.patient_age_years) : null;
+  if (age !== null && Number.isFinite(age) && age < 18) {
+    return {
+      verdict: 'out_of_scope', reason: 'pediatric',
+      resolved: { input: drugRaw },
+      message: 'Pediatric dosing is weight- and age-based and varies by product — this tool only covers adult OTC ceilings. Use the product’s pediatric chart or ask a pharmacist/clinician.',
+      disclaimer: DOSE_DISCLAIMER,
+    };
+  }
+  const res = resolveIngredient(drugRaw);
+  if (!res.matched) {
+    return {
+      verdict: 'out_of_scope', reason: 'unknown_or_prescription',
+      resolved: { input: drugRaw, matched: false },
+      message: `“${drugRaw}” is not a recognized adult OTC analgesic/antipyretic (acetaminophen, ibuprofen, naproxen, aspirin). It may be prescription-only or combination — do not estimate; check the label or ask a pharmacist.`,
+      disclaimer: DOSE_DISCLAIMER,
+    };
+  }
+  const limits = OTC_DOSE_TABLE[res.ingredient];
+
+  // --- parse dose events (the model's only job was extraction) ---
+  const rawDoses = Array.isArray(a.doses) ? a.doses : [];
+  const parsed = [];
+  let unparsed = 0;
+  for (const dz of rawDoses) {
+    const ms = parseDoseAt(dz && dz.at, nowMs);
+    const mg = Number(dz && dz.amount_mg);
+    if (!Number.isFinite(ms) || !Number.isFinite(mg) || mg <= 0) { unparsed++; continue; }
+    parsed.push({ ms, mg });
+  }
+  parsed.sort((x, y) => x.ms - y.ms);
+
+  const proposedMg = a.proposed_mg !== undefined && Number.isFinite(Number(a.proposed_mg))
+    ? Number(a.proposed_mg) : null;
+
+  // --- rolling 24h window ending now ---
+  const windowStart = nowMs - MS_PER_DAY;
+  const inWindow = parsed.filter((d) => d.ms > windowStart && d.ms <= nowMs);
+  const total24h = inWindow.reduce((s, d) => s + d.mg, 0);
+  const remainingMg = Math.max(0, limits.max_daily_mg - total24h);
+
+  // --- interval since last dose ---
+  const lastMs = parsed.length ? parsed[parsed.length - 1].ms : null;
+  const intervalOkAt = lastMs !== null ? lastMs + limits.min_interval_hours * MS_PER_HOUR : nowMs;
+  const intervalOkNow = nowMs >= intervalOkAt;
+
+  // --- earliest instant when a `proposed_mg` (or a fresh standard dose) is safe ---
+  // Safe = interval has cleared AND the trailing-24h sum + proposed ≤ daily max.
+  const need = proposedMg !== null ? proposedMg : 0;
+  function windowSumAt(t) {
+    return parsed.reduce((s, d) => (d.ms > t - MS_PER_DAY && d.ms <= t ? s + d.mg : s), 0);
+  }
+  const candidates = new Set([nowMs, intervalOkAt]);
+  for (const d of parsed) candidates.add(d.ms + MS_PER_DAY + 1); // instant a dose leaves the 24h window
+  let earliestSafe = null;
+  for (const t of [...candidates].filter((t) => t >= nowMs).sort((x, y) => x - y)) {
+    if (t >= intervalOkAt && windowSumAt(t) + need <= limits.max_daily_mg) { earliestSafe = t; break; }
+  }
+  const timeToNextSafeHours = earliestSafe !== null ? Math.max(0, (earliestSafe - nowMs) / MS_PER_HOUR) : null;
+
+  // --- verdict (most severe wins) + collected warnings ---
+  const warnings = [];
+  if (res.combination) {
+    warnings.push(`This looks like a combination product (${res.comboBrand}) that contains ${res.ingredient} — count it toward the ${res.ingredient} total, and check every other medicine for hidden ${res.ingredient} (a common accidental-overdose path).`);
+  }
+  let verdict = 'ok';
+  const projected = proposedMg !== null ? total24h + proposedMg : total24h;
+  if (unparsed > 0) verdict = 'need_times';
+  if (proposedMg !== null && proposedMg > limits.max_single_mg) verdict = 'exceeds_single_dose';
+  if (!intervalOkNow) verdict = 'interval_too_soon';
+  if (projected > limits.max_daily_mg) verdict = 'exceeds_daily_max';
+
+  let message;
+  switch (verdict) {
+    case 'exceeds_daily_max':
+      message = `That would put the 24-hour ${res.ingredient} total at ${projected} mg, over the ${limits.max_daily_mg} mg/day limit. Do not take more now.` +
+        (timeToNextSafeHours !== null ? ` The next dose fits within the limit in about ${timeToNextSafeHours.toFixed(1)}h.` : '');
+      break;
+    case 'interval_too_soon':
+      message = `The last dose was too recent — wait at least ${limits.min_interval_hours}h between doses of ${res.ingredient}.` +
+        (timeToNextSafeHours !== null ? ` Next safe dose in about ${timeToNextSafeHours.toFixed(1)}h.` : '');
+      break;
+    case 'exceeds_single_dose':
+      message = `${proposedMg} mg is above the ${limits.max_single_mg} mg single-dose limit for OTC ${res.ingredient}.`;
+      break;
+    case 'need_times':
+      message = `Some dose times/amounts couldn’t be read (${unparsed}). Give the time and mg of each recent dose and I’ll compute the rolling 24-hour total exactly — don’t estimate.`;
+      break;
+    default:
+      message = proposedMg !== null
+        ? `Taking ${proposedMg} mg now is within limits: 24-hour ${res.ingredient} total would be ${projected} mg of ${limits.max_daily_mg} mg, and it’s been long enough since the last dose.`
+        : `So far ${total24h} mg of ${res.ingredient} in the last 24h; ${remainingMg} mg of headroom to the ${limits.max_daily_mg} mg/day limit.`;
+  }
+
+  return {
+    resolved: { input: drugRaw, ingredient: res.ingredient, matched: true, combination: !!res.combination },
+    limits: {
+      max_daily_mg: limits.max_daily_mg, min_interval_hours: limits.min_interval_hours,
+      max_single_mg: limits.max_single_mg, source: limits.source, brand_note: limits.brand_note,
+    },
+    rolling_24h: { window_hours: 24, doses_in_window: inWindow.length, total_mg: total24h, remaining_mg: remainingMg },
+    interval: {
+      last_dose_at: lastMs !== null ? new Date(lastMs).toISOString() : null,
+      earliest_next_at: lastMs !== null ? new Date(intervalOkAt).toISOString() : null,
+      ok_now: intervalOkNow,
+    },
+    proposed: proposedMg !== null ? { amount_mg: proposedMg, projected_24h_total_mg: projected, would_exceed_daily: projected > limits.max_daily_mg } : null,
+    time_to_next_safe: earliestSafe !== null && timeToNextSafeHours > 0
+      ? { hours: Number(timeToNextSafeHours.toFixed(2)), at: new Date(earliestSafe).toISOString() } : { hours: 0, at: new Date(nowMs).toISOString() },
+    verdict,
+    warnings,
+    message,
+    disclaimer: DOSE_DISCLAIMER,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Tool: rank_sources — apply the deterministic model to a caller-supplied list
 // ---------------------------------------------------------------------------
 
@@ -1131,6 +1344,32 @@ const TOOLS = [
     },
   },
   {
+    name: 'dose_check',
+    description:
+      'DETERMINISTIC OTC dose safety check — call this INSTEAD of computing dose timing yourself. ' +
+      'For any "can I take another dose?", "how much more can I take?", or time-until-next-dose question ' +
+      'about an adult over-the-counter pain/fever medicine (acetaminophen/paracetamol, ibuprofen, naproxen, ' +
+      'aspirin), extract the dose events and pass them here; this tool owns every number (rolling 24-hour ' +
+      'total, minimum interval, time-to-next-safe-dose, hidden-duplicate detection) against the FDA OTC ' +
+      'monograph limits. Report ITS verdict and numbers. Prescription drugs and weight-based pediatric ' +
+      'dosing return out_of_scope — route those to a clinician/pharmacist, never estimate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        drug: { type: 'string', description: 'Brand or generic name, e.g. "Tylenol" or "ibuprofen".' },
+        doses: {
+          type: 'array',
+          description: 'The doses already taken. Each: {at, amount_mg}. `at` = ISO-8601 timestamp OR an integer number of minutes ago (as a string). YOU extract these from what the user said; do not do the math.',
+          items: { type: 'object' },
+        },
+        proposed_mg: { type: 'number', description: 'Optional: the amount the user is asking whether it is safe to take NOW.' },
+        now: { type: 'string', description: 'Optional ISO-8601 evaluation instant (default = now).' },
+        patient_age_years: { type: 'number', description: 'Optional; under 18 returns out_of_scope (pediatric dosing is weight-based).' },
+      },
+      required: ['drug'],
+    },
+  },
+  {
     name: 'rank_sources',
     description:
       'Apply the deterministic Rounds trust-ranking model to a caller-supplied list of citations. ' +
@@ -1261,6 +1500,7 @@ const TOOL_HANDLERS = {
   search_literature: tool_search_literature,
   find_trials: tool_find_trials,
   drug_label: tool_drug_label,
+  dose_check: tool_dose_check,
   rank_sources: tool_rank_sources,
   report_sources: tool_report_ack('sources'),
   report_alert: tool_report_ack('alert'),

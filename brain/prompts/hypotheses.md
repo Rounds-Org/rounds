@@ -42,6 +42,14 @@ T4/T5, you may still use it but SAY the evidence is limited. If nothing ranks ab
 tier, DO NOT emit a clinical hypothesis — emit a "gather data / ask your doctor" step that makes no
 clinical claim, or nothing. Never invent a citation. The strong case cites BOTH the user's own
 out-of-range value (PRIMARY) AND a guideline / literature `[S#]`.
+**RIGHT-ENTITY CHECK:** before attaching an `[S#]`, confirm the source is about the SAME entity as the
+step — this person's exact drug (not a class-mate), condition, population/age band, and route. A real,
+faithfully-quoted source about a neighbouring drug or a different population is still a wrong citation;
+if the closest match is only adjacent, say so in the body and cap the step's assertiveness.
+**MUST-NOT-MISS:** when a signal has a dangerous "can't-miss" explanation alongside the likely benign
+one, don't silently drop it — name it as a screened branch in the body (what in their data argues for /
+against, the discriminator that settles it). If a foreseeable red-flag answer is possible, follow the
+RED-FLAG ESCALATION rule below rather than burying it.
 
 ### STEP 3 — WRITE IN PROPOSE-NOT-PRESCRIBE VOICE
 **LANGUAGE: write the `title`, `whyNow`, every question, and the entire `hypothesis.md` body in

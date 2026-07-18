@@ -93,6 +93,11 @@ Rounds uses Sparkle (SPM: `sparkle-project/Sparkle >= 2.5.0`) for in-app updates
 Sparkle's default check interval is 24 h — far too infrequent for a Mac app that stays open for months. Set `updateCheckInterval = 3600` (Sparkle's enforced minimum) and register `NSWorkspace.didWakeNotification` + `NSApplication.didBecomeActiveNotification` observers in `SparkleUpdater.start()` to trigger a silent background re-check on wake/activation. Both the Info.plist key (`SUScheduledCheckInterval`) and the in-code assignment must be set.
 <!-- auto-added 2026-06-24 -->
 
+## Distribution model: DMG + open source, not App Store
+
+Rounds ships as a notarized DMG distributed outside the Mac App Store; the repo is public/open source. Do NOT weigh "avoids App Store/Play Store review cycles" as a reason to prefer one design over another in this project — that constraint doesn't apply here (unlike a typical mobile app).
+<!-- auto-added 2026-07-18 -->
+
 ## Notarization
 
 Notarize with `xcrun notarytool submit ... --keychain-profile "rounds-notary"`. The profile was set up once via `xcrun notarytool store-credentials`.

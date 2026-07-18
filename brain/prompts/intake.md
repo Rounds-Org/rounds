@@ -93,7 +93,12 @@ New person → create `person.json` (with `slug`, `displayName`, `relationshipTo
 per-person `CLAUDE.md`. Append the raw Q&A to `intake.jsonl`; distill ONLY confirmed durable
 facts into the per-person `CLAUDE.md` (and, for cross-person facts like the account holder's
 name or the family roster, append to the global `.rounds/memory.md`) — never a fact the user
-didn't confirm, and never into the root `CLAUDE.md` (the app owns it). Confirm in one line
+didn't confirm, and never into the root `CLAUDE.md` (the app owns it). **Write each distilled
+fact WITH ITS PROVENANCE AND DATE** — "reports X (2026-05)", "value Z on <date>", "GP diagnosed
+Y (2024)" — not as a bare adjudicated fact; a stored claim keeps who said it and when, so later
+turns weigh it instead of automatically agreeing with it. **Label state** (current /
+past-resolved / changed-on-<date>) for anything that can change over time — a symptom, a
+medication, a value — so a stale state is never later read as today's. Confirm in one line
 WHERE it was filed, with a person/relationship readback. Do not edit `index.json`. Offer
 analysis as a next step; do not analyze here.
 

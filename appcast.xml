@@ -3,12 +3,23 @@
     <channel>
         <title>rounds</title>
         <item>
-            <title>1.6.1</title>
-            <pubDate>Fri, 10 Jul 2026 14:24:31 +0400</pubDate>
-            <sparkle:version>140</sparkle:version>
-            <sparkle:shortVersionString>1.6.1</sparkle:shortVersionString>
+            <title>1.7.0</title>
+            <pubDate>Sat, 18 Jul 2026 13:21:51 +0400</pubDate>
+            <sparkle:version>141</sparkle:version>
+            <sparkle:shortVersionString>1.7.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/Rounds-Org/rounds/releases/download/v1.6.1/Rounds-1.6.1.zip" length="8394510" type="application/octet-stream" sparkle:edSignature="pNYUL6rLFbLo+epROoDkQjYrfliqR3N0xentAacAcCW5DfkGAK1t4teRH20gHJgi8sbTlxYkL3ZpeJu42lSzCA=="/>
+            <description><![CDATA[<h2>Rounds 1.7.0</h2>
+<p>This release makes Rounds safer and sharper when reasoning about your health.</p>
+<ul>
+  <li><b>Exact medication dose checks.</b> When you ask “can I take another dose?” for common over-the-counter pain and fever medicines (acetaminophen/paracetamol, ibuprofen, naproxen, aspirin), Rounds now computes the rolling 24-hour total and the time until your next safe dose exactly, instead of estimating — and flags hidden duplicate ingredients in combination products.</li>
+  <li><b>More careful clinical reasoning.</b> The assistant now screens for dangerous “can’t-miss” conditions before settling on the likely cause, and guards against jumping to conclusions too early.</li>
+  <li><b>Better memory of your history.</b> Facts are kept with who said them and when, and current values are clearly separated from past ones — so an old result is never mistaken for today’s, and your own guesses aren’t treated as established fact.</li>
+  <li><b>A wider safety net.</b> The instant red-flag detector now also recognizes possible overdose/poisoning and severe alcohol or sedative withdrawal.</li>
+  <li><b>Fewer needless refusals</b> of legitimate questions about your own records, plus groundwork to keep improving this.</li>
+</ul>
+<p style="color:#5E6E6A;font-size:13px">Everything continues to run locally on your Mac. Your documents never leave except as de-identified, concept-only lookups.</p>
+]]></description>
+            <enclosure url="https://github.com/Rounds-Org/rounds/releases/download/v1.7.0/Rounds-1.7.0.zip" length="8416262" type="application/octet-stream" sparkle:edSignature="hJr/QzrawcYn2XY7QOOFhK5i8qmmP+vHY3Rsiepp83tX/9IiVXkHRmn8748Ev7en6kDleiGUgEqPYucclnfBDA=="/>
         </item>
     </channel>
 </rss>

@@ -16,6 +16,10 @@ struct roundsApp: App {
             ContentView()
                 .environment(app)
                 .task { await app.bootstrap() }
+                // Claude Code may have updated (new models) while Rounds sat open — re-read the list.
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    Task { await app.refreshModels() }
+                }
                 .frame(minWidth: 1080, minHeight: 720)
         }
         .commands {

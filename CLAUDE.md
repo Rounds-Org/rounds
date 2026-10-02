@@ -201,3 +201,9 @@ There are currently NO Rounds-native intercepted slash commands — every `/`-pr
 
 Do NOT route done/dismiss/snooze/activate status changes through the brain. Call `app.setHypothesisStatusLocally(id, status)` (updates `AppState.hypotheses` in-memory + writes via `VaultStore.setHypothesisStatus`). The LLM path is flaky and caused Home to stay out of sync with what the chat confirmed was resolved. The "Mark as resolved" button in `HypothesisCard` must appear ONLY in the expanded state (beside the large "Chat about this" button), not in the collapsed card.
 <!-- auto-added 2026-07-10 -->
+## Model list is LIVE from Claude Code — never hardcode model names/versions
+
+`RoundsModel` is a string wrapper around the `--model` value; names/descriptions/effort levels come from `ModelCatalog`, which sends an `initialize` control_request to `claude -p --input-format stream-json` and reads `models` from the `control_response` (no prompt, no tokens). Cached in UserDefaults (`rounds.modelCatalog.v1`), refreshed at launch and on app activation (throttled 1 h). Do NOT reintroduce a hardcoded enum like "Opus 4.8 / Sonnet 4.6" — it goes stale on every model release. Default stays the `opus` alias (Claude Code resolves it to the newest Opus). `--effort` is only passed when the selected model lists that level (Haiku takes none).
+## Full-power chat loads the user's own MCP servers
+
+`ClaudeRun.strictMCP`: chat runs in full power set it to `false`, so `--strict-mcp-config` is dropped and the user's MCP servers (user scope + claude.ai connectors) load alongside `rounds-sources`, exactly like `claude` in Terminal. Safe mode and background runs (hypotheses, intake, titling) keep `--strict-mcp-config`. `AppState.traceLabel` humanizes ANY tool (`mcp__<server>__<tool>` → "Server · tool: arg", Bash/Write/Agent/Skill…); failed tool results (`is_error`) mark the step "— failed" in red; a plain turn's tool steps persist on the message as a one-phase "Used N tools" timeline.

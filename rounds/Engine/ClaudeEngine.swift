@@ -13,20 +13,28 @@
 
 import Foundation
 
-nonisolated enum RoundsModel: String, CaseIterable, Sendable, Codable {
-    case opus, sonnet, haiku
+/// A Claude model as Claude Code names it on `--model`. `rawValue` is the CLI value — an alias
+/// (`opus`/`sonnet`/`haiku`, which Claude Code itself resolves to the newest model of that family) or
+/// a full id (`claude-fable-5-1`). The human names come from `ModelCatalog`, which is read LIVE from the
+/// installed CLI (`initialize` control_request → `models`), so the picker never goes stale.
+nonisolated struct RoundsModel: RawRepresentable, Hashable, Sendable, Codable {
+    var rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+
+    static let opus = RoundsModel(rawValue: "opus")
+    static let sonnet = RoundsModel(rawValue: "sonnet")
+    static let haiku = RoundsModel(rawValue: "haiku")
+
+    private var info: ModelInfo? { ModelCatalog.shared.info(rawValue) }
+    /// Menu line, e.g. "Opus 5.5 — Best for everyday, complex tasks".
     var displayName: String {
-        switch self {
-        case .opus: "Opus 4.8 — deepest reasoning (default)"
-        case .sonnet: "Sonnet 4.6 — fast & capable"
-        case .haiku: "Haiku 4.5 — fastest"
-        }
+        guard let i = info else { return short }
+        return i.description.isEmpty ? i.displayName : "\(i.displayName) — \(i.description)"
     }
-    var short: String {
-        switch self {
-        case .opus: "Opus"; case .sonnet: "Sonnet"; case .haiku: "Haiku"
-        }
-    }
+    /// Compact label for the toolbar, e.g. "Opus 5.5".
+    var short: String { info?.displayName ?? rawValue.capitalized }
+    /// Effort levels this model accepts (empty → the model doesn't take `--effort`).
+    var supportedEfforts: [String] { info?.supportedEffortLevels ?? RoundsEffort.allCases.filter { $0 != .default }.map(\.rawValue) }
 }
 
 /// Reasoning effort for the run (`claude --effort`). Higher = more thinking, slower. `default` skips
@@ -153,7 +161,7 @@ nonisolated enum RoundsEvent: Sendable {
     case started(sessionId: String, model: String)
     case textDelta(String)
     case toolUse(name: String, input: String)
-    case toolResult(String)
+    case toolResult(String, isError: Bool)
     case usage(outputTokens: Int)   // cumulative output tokens for the current message (live counter)
     case slashCommands([String])    // available Claude Code slash commands (from the init event)
     case userMessage(String)        // an inbound user turn — e.g. typed from the phone via remote control
@@ -185,6 +193,9 @@ nonisolated struct ClaudeRun: Sendable {
     var cwd: URL
     var appendSystemPrompt: String?
     var mcpConfigPath: String?
+    /// true → `--strict-mcp-config`: ONLY the Rounds MCP config loads. false → the user's own MCP
+    /// servers (user/project scope, same as running `claude` in Terminal) load ALONGSIDE rounds-sources.
+    var strictMCP: Bool = true
     var settingsPath: String?
     var resumeSessionId: String?
     var toolPaths: ToolPaths
@@ -217,7 +228,7 @@ nonisolated enum ClaudeEngine {
             if run.includePartial { args += ["--include-partial-messages"] }
             if run.effort != .default { args += ["--effort", run.effort.rawValue] }
             args += ["--permission-mode", run.permissionMode.rawValue]
-            if let mcp = run.mcpConfigPath { args += ["--strict-mcp-config", "--mcp-config", mcp] }
+            if let mcp = run.mcpConfigPath { args += (run.strictMCP ? ["--strict-mcp-config"] : []) + ["--mcp-config", mcp] }
             if let settings = run.settingsPath { args += ["--settings", settings] }
             if let sys = run.appendSystemPrompt { args += ["--append-system-prompt", sys] }
             if !run.policy.allowed.isEmpty { args += ["--allowedTools", run.policy.allowed.joined(separator: " ")] }
@@ -400,7 +411,7 @@ nonisolated enum EventMapper {
             }
             if let content = message["content"] as? [[String: Any]] {
                 for block in content where (block["type"] as? String) == "tool_result" {
-                    return [.toolResult(stringifyToolResult(block["content"]))]
+                    return [.toolResult(stringifyToolResult(block["content"]), isError: (block["is_error"] as? Bool) == true)]
                 }
                 let texts = content.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }
                 if !texts.isEmpty { return [.userMessage(texts.joined(separator: "\n"))] }

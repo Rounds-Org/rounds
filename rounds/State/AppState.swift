@@ -54,6 +54,23 @@ final class AppState {
         }
     }
 
+    /// Live model list from the installed Claude Code (see ModelCatalog). Current = newest per family.
+    var availableModels: [RoundsModel] = ModelCatalog.shared.split().current.map { RoundsModel(rawValue: $0.value) }
+    var olderModels: [RoundsModel] = ModelCatalog.shared.split().older.map { RoundsModel(rawValue: $0.value) }
+    private var modelsRefreshedAt: Date?
+
+    /// Re-read the model list from the CLI (cheap: no prompt, no tokens). Throttled to once an hour
+    /// unless forced; called at launch and whenever the app becomes active.
+    func refreshModels(force: Bool = false) async {
+        guard toolPaths.claudeInstalled else { return }
+        if !force, let t = modelsRefreshedAt, Date().timeIntervalSince(t) < 3600 { return }
+        modelsRefreshedAt = Date()
+        await ModelCatalog.shared.refresh(toolPaths: toolPaths)
+        let (cur, old) = ModelCatalog.shared.split()
+        availableModels = cur.map { RoundsModel(rawValue: $0.value) }
+        olderModels = old.map { RoundsModel(rawValue: $0.value) }
+    }
+
     var selectedEffort: RoundsEffort = .default {
         didSet {
             guard selectedEffort != oldValue else { return }
@@ -319,9 +336,10 @@ final class AppState {
         }
         VaultStore.reconcileAllStaged(vault)   // repair any filed-but-stranded raw files in inbox
         reload()
-        if let raw = VaultStore.readString("model", vault), let m = RoundsModel(rawValue: raw) {
-            selectedModel = m
+        if let raw = VaultStore.readString("model", vault), !raw.isEmpty {
+            selectedModel = RoundsModel(rawValue: raw)
         }
+        Task { await refreshModels(force: true) }
         if let raw = VaultStore.readString("effort", vault), let e = RoundsEffort(rawValue: raw) {
             selectedEffort = e
         }
@@ -442,13 +460,18 @@ final class AppState {
                   resumeSessionId: resume,
                   toolPaths: toolPaths,
                   permissionMode: mode,
-                  effort: selectedEffort,
+                  // A model that doesn't take --effort (e.g. Haiku) must not be passed one.
+                  effort: selectedModel.supportedEfforts.contains(selectedEffort.rawValue) ? selectedEffort : .default,
                   researchStage: stage ?? researchStage)
     }
 
     /// Read-only chat run config used by ChatRuntime.
     func chatRun(prompt: String = "", resume: String? = nil, stage: RoundsResearchStage? = nil) -> ClaudeRun {
-        baseRun(prompt: prompt, policy: .readOnly, resume: resume, stage: stage)
+        var run = baseRun(prompt: prompt, policy: .readOnly, resume: resume, stage: stage)
+        // Full power chat = Claude Code as in Terminal: the user's own MCP servers (Gmail, Drive,
+        // anything from `claude mcp add`) load next to rounds-sources. Safe mode stays Rounds-only.
+        run.strictMCP = !fullPowerActive
+        return run
     }
 
     func stop() { activeRuntime?.stop() }
@@ -552,24 +575,54 @@ final class AppState {
         return out
     }
 
-    /// A friendly one-line label for a tool call, for the research trace.
+    /// A friendly one-line label for ANY tool call, for the live trace — Rounds' own sources tools,
+    /// Claude Code built-ins (Bash, Write, sub-agents, skills…) and the user's own MCP servers.
     static func traceLabel(_ name: String, _ input: String) -> String {
-        let arg: String? = {
-            guard let d = input.data(using: .utf8),
-                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
-            return (o["query"] ?? o["condition"] ?? o["name"] ?? o["pattern"]).flatMap { $0 as? String }
-        }()
-        func withArg(_ verb: String) -> String { arg.map { "\(verb): \($0.prefix(60))" } ?? verb }
-        switch name {
-        case "mcp__rounds-sources__search_literature": return withArg("Searched the medical literature")
-        case "mcp__rounds-sources__find_trials": return withArg("Searched clinical trials")
-        case "mcp__rounds-sources__drug_label": return withArg("Looked up the drug label")
-        case "mcp__rounds-sources__rank_sources": return "Ranked the sources by trust"
-        case "Read": return "Read a document"
-        case "Glob", "Grep": return "Scanned your files"
-        case "WebFetch": return "Opened a source to read it"
-        default: return name.replacingOccurrences(of: "mcp__rounds-sources__", with: "")
+        let o: [String: Any] = input.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        func str(_ keys: String...) -> String? {
+            for k in keys { if let v = o[k] as? String, !v.trimmingCharacters(in: .whitespaces).isEmpty { return v } }
+            return nil
         }
+        func clip(_ s: String) -> String {
+            let one = s.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+            return one.count > 70 ? String(one.prefix(70)) + "…" : one
+        }
+        func with(_ verb: String, _ a: String?) -> String { a.map { "\(verb): \(clip($0))" } ?? verb }
+        let file = str("file_path", "notebook_path", "path").map { ($0 as NSString).lastPathComponent }
+        let arg = str("query", "condition", "name", "pattern", "description", "prompt", "url", "subject")
+
+        switch name {
+        case "mcp__rounds-sources__search_literature": return with("Searched the medical literature", arg)
+        case "mcp__rounds-sources__find_trials": return with("Searched clinical trials", arg)
+        case "mcp__rounds-sources__drug_label": return with("Looked up the drug label", arg)
+        case "mcp__rounds-sources__rank_sources": return "Ranked the sources by trust"
+        case "Read": return with("Read", file ?? "a document")
+        case "Write": return with("Wrote", file ?? "a file")
+        case "Edit", "MultiEdit", "NotebookEdit": return with("Edited", file ?? "a file")
+        case "Glob", "Grep": return with("Scanned your files", str("pattern"))
+        case "Bash": return with("Ran a command", str("description", "command"))
+        case "WebSearch": return with("Searched the web", str("query"))
+        case "WebFetch": return with("Opened", str("url").flatMap { URL(string: $0)?.host } ?? "a source")
+        case "Task", "Agent": return with("Delegated to a sub-agent", str("description", "prompt"))
+        case "Skill": return with("Used skill", str("skill", "command", "name"))
+        case "TodoWrite": return "Updated the plan"
+        case "ToolSearch": return "Loaded more tools"
+        default: break
+        }
+        // Any MCP tool: mcp__<server>__<tool> → "Gmail · search threads: <arg>".
+        if name.hasPrefix("mcp__") {
+            let parts = name.dropFirst(5).components(separatedBy: "__")
+            var server = parts.first ?? ""
+            let tool = parts.dropFirst().joined(separator: " ").replacingOccurrences(of: "_", with: " ")
+            for pre in ["claude_ai_", "plugin_"] where server.hasPrefix(pre) { server = String(server.dropFirst(pre.count)) }
+            server = server.replacingOccurrences(of: "_", with: " ")
+            // claude.ai connectors are keyed by UUID — don't show a UUID as the name.
+            if server.range(of: #"^[0-9a-f]{8}-[0-9a-f]{4}-"#, options: .regularExpression) != nil { server = "Connector" }
+            let head = server.isEmpty ? tool : "\(server) · \(tool)"
+            return with(head, arg ?? str("command", "text"))
+        }
+        return with(name, arg)
     }
 
     // MARK: - Tabs

@@ -69,7 +69,7 @@ nonisolated final class WarmSession: @unchecked Sendable {
         // (without this the warm session starts blank and re-grounds only from files).
         if let resume = config.resumeSessionId, !resume.isEmpty { args += ["--resume", resume] }
         if config.effort != .default { args += ["--effort", config.effort.rawValue] }
-        if let mcp = config.mcpConfigPath { args += ["--strict-mcp-config", "--mcp-config", mcp] }
+        if let mcp = config.mcpConfigPath { args += (config.strictMCP ? ["--strict-mcp-config"] : []) + ["--mcp-config", mcp] }
         if let settings = config.settingsPath { args += ["--settings", settings] }
         if let sys = config.appendSystemPrompt { args += ["--append-system-prompt", sys] }
         if !config.policy.allowed.isEmpty { args += ["--allowedTools", config.policy.allowed.joined(separator: " ")] }

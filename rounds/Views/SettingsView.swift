@@ -37,10 +37,14 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     section("Model") {
-                        Text("Which Claude model the brain uses. Opus is the deepest reasoner.")
+                        Text("Which Claude model the brain uses. The list is read from your installed Claude Code, so new models show up automatically.")
                             .zfont(.caption).foregroundStyle(.secondary)
                         Picker("", selection: Binding(get: { app.selectedModel }, set: { app.selectedModel = $0 })) {
-                            ForEach(RoundsModel.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                            ForEach(app.availableModels + app.olderModels, id: \.self) { Text($0.displayName).tag($0) }
+                            // A saved pick that's no longer listed still shows (and still runs).
+                            if !(app.availableModels + app.olderModels).contains(app.selectedModel) {
+                                Text(app.selectedModel.displayName).tag(app.selectedModel)
+                            }
                         }
                         .labelsHidden().pickerStyle(.radioGroup)
                     }

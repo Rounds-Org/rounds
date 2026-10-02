@@ -24,7 +24,7 @@ nonisolated enum AnalyticsEvent: Sendable {
     case chatStarted
     case ranSearch(sourceCount: Int, topTier: String)
     case turnCompleted(refusal: String, retried: Bool, recovered: Bool)  // refusal ∈ {none, over, evidence}
-    case modelChanged(model: String)              // opus/sonnet/haiku
+    case modelChanged(model: String)              // CLI model value: opus/sonnet/haiku/claude-fable-5-1…
     case updateBannerShown
     case updateBannerClicked
 

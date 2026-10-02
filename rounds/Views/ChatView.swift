@@ -418,6 +418,7 @@ struct PhaseTimeline: View {
 
     private var headerText: String {
         if !expanded, let a = activeIndex { return phases[a].label }
+        if phases.count == 1 { return phases[0].label }   // e.g. a plain turn's "Used 4 tools"
         let n = phases.count
         return "\(n) step\(n == 1 ? "" : "s")"
     }
@@ -480,7 +481,9 @@ private struct PhaseRow: View {
                 if !phase.steps.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(Array(phase.steps.enumerated()), id: \.offset) { _, step in
-                            Text(step).zfont(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                            Text(step).zfont(.caption2)
+                                .foregroundStyle(step.hasSuffix(" — failed") ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.tertiary))
+                                .lineLimit(1).help(step)
                         }
                     }
                 }
@@ -527,7 +530,12 @@ struct ResearchTrace: View {
             .buttonStyle(.plain)
 
             if expanded {
-                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                // Long agentic runs can do dozens of calls — show the most recent ones, count the rest.
+                let shown = 14, hidden = max(0, steps.count - shown)
+                if hidden > 0 {
+                    Text("+\(hidden) earlier step\(hidden == 1 ? "" : "s")").zfont(.caption2).foregroundStyle(.tertiary)
+                }
+                ForEach(Array(steps.enumerated()).suffix(shown), id: \.offset) { i, step in
                     HStack(spacing: 7) {
                         if i == steps.count - 1 {
                             ProgressView().controlSize(.mini)

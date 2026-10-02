@@ -324,6 +324,13 @@ final class ChatRuntime: Identifiable {
             app.toolPaths.loggedIn = false
         }
         finishPhases()   // stop the last dot spinning; snapshot the timeline onto the message so it persists
+        // A plain turn (no <phase> markers) still did real work — keep its tool steps on the message
+        // as a collapsed one-phase timeline, so "what did it actually do?" survives the answer.
+        if phases.isEmpty, !trace.isEmpty {
+            phases = [PipelinePhase(id: UUID().uuidString,
+                                    label: "Used \(trace.count) tool\(trace.count == 1 ? "" : "s")",
+                                    done: true, steps: trace)]
+        }
         messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(), phases: phases))
         if !parsed.sources.isEmpty {
             sources = parsed.sources
@@ -488,13 +495,18 @@ final class ChatRuntime: Identifiable {
                 }
                 let label = AppState.traceLabel(n, i)
                 statusLine = label
-                if trace.last != label { trace.append(label) }
+                trace.append(label)
                 // Nest the tool under the active phase (the dot's chips), if a timeline is running.
                 if let last = phases.indices.last, !phases[last].done, phases[last].steps.last != label {
                     phases[last].steps.append(label)
                 }
-            case .toolResult(let payload):
-                statusLine = "Reading sources…"
+            case .toolResult(let payload, let isError):
+                // Surface a failed tool call (MCP error, command failure…) instead of hiding it.
+                if isError, let last = trace.last, !last.hasSuffix(" — failed") {
+                    trace[trace.count - 1] = last + " — failed"
+                    if let p = phases.indices.last, phases[p].steps.last == last { phases[p].steps[phases[p].steps.count - 1] = last + " — failed" }
+                }
+                statusLine = isError ? (trace.last ?? "A step failed") : "Thinking…"
                 let c = ProtocolParser.citationsFromToolResult(payload)
                 if !c.isEmpty { sources = c }
             case .finished(let t, let s, let e, _):

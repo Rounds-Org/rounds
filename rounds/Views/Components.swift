@@ -40,18 +40,16 @@ struct DisclaimerChin: View {
     }
 }
 
-// MARK: - Model picker (Opus default)
+// MARK: - Model picker (live list from Claude Code; Opus alias default)
 
 struct ModelPicker: View {
     @Environment(AppState.self) private var app
     var body: some View {
-        @Bindable var app = app
         Menu {
-            ForEach(RoundsModel.allCases, id: \.self) { m in
-                Button {
-                    app.selectedModel = m
-                } label: {
-                    Label(m.displayName, systemImage: app.selectedModel == m ? "checkmark" : "")
+            ForEach(app.availableModels, id: \.self) { m in item(m) }
+            if !app.olderModels.isEmpty {
+                Menu("Older models") {
+                    ForEach(app.olderModels, id: \.self) { m in item(m) }
                 }
             }
         } label: {
@@ -63,7 +61,15 @@ struct ModelPicker: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Model used by Claude Code. Opus is the default.")
+        .help("Model used by Claude Code. The list comes from your installed Claude Code, so new models appear automatically.")
+    }
+
+    private func item(_ m: RoundsModel) -> some View {
+        Button {
+            app.selectedModel = m
+        } label: {
+            Label(m.displayName, systemImage: app.selectedModel == m ? "checkmark" : "")
+        }
     }
 }
 
@@ -72,7 +78,8 @@ struct EffortPicker: View {
     var body: some View {
         @Bindable var app = app
         Menu {
-            ForEach(RoundsEffort.allCases, id: \.self) { e in
+            // Only the levels the selected model actually supports (from the live model list).
+            ForEach(RoundsEffort.allCases.filter { $0 == .default || app.selectedModel.supportedEfforts.contains($0.rawValue) }, id: \.self) { e in
                 Button { app.selectedEffort = e } label: {
                     Label(e.displayName, systemImage: app.selectedEffort == e ? "checkmark" : "")
                 }
@@ -80,7 +87,7 @@ struct EffortPicker: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "brain")
-                Text(app.selectedEffort.short)
+                Text(app.selectedModel.supportedEfforts.contains(app.selectedEffort.rawValue) ? app.selectedEffort.short : RoundsEffort.default.short)
             }
             .zfont(.caption, .medium)
         }

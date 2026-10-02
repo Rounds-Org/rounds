@@ -359,6 +359,8 @@ private struct CenterTabBar: View {
             HStack(spacing: 6) {
                 if app.tabIsStreaming(item) {
                     PulsingDot()
+                } else if case .chat(let id) = item, app.isChatUnread(id) {
+                    UnreadDot()
                 } else {
                     Image(systemName: icon).zfont(.caption2)
                 }

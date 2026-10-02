@@ -19,6 +19,7 @@ struct roundsApp: App {
                 // Claude Code may have updated (new models) while Rounds sat open — re-read the list.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     Task { await app.refreshModels() }
+                    if let id = app.activeChatTab { app.markChatSeen(id) }   // back in the app, on that chat → seen
                 }
                 .frame(minWidth: 1080, minHeight: 720)
         }
@@ -47,6 +48,8 @@ struct roundsApp: App {
                     .keyboardShortcut(.tab, modifiers: .control)
                 Button("Previous Tab") { app.cycleTab(forward: false) }
                     .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                Button("Search…") { app.searchFocusRequest += 1 }
+                    .keyboardShortcut("k", modifiers: .command)
                 Button("Settings…") { app.showSettings = true }
                     .keyboardShortcut(",", modifiers: .command)
                 Divider()

@@ -141,7 +141,9 @@ final class AppState {
         var id: String { switch self { case .home: "home"; case .chat(let i): "c:" + i; case .file(let p): "f:" + p } }
     }
     var openTabs: [CenterItem] = [.home]
-    var activeTab: CenterItem = .home
+    var activeTab: CenterItem = .home {
+        didSet { if case .chat(let id) = activeTab, NSApp.isActive { markChatSeen(id) } }
+    }
     private var tabHistory: [CenterItem] = [.home]   // index 0 = most recent
     var openFileDocs: [String: MedDocument] = [:]    // relativePath -> doc
 
@@ -427,6 +429,98 @@ final class AppState {
         hypotheses = snap.hypotheses
         chats = snap.chats
         displayName = snap.displayName
+        scheduleCatalogRebuild()
+    }
+
+    // MARK: - Chat catalog: group-by-person, unread dots, search
+
+    /// Bumped by ⌘K to focus the sidebar search field.
+    var searchFocusRequest = 0
+
+    /// Auto-derived "who is this chat about" (ChatCatalog). A user override always wins.
+    var chatPerson: [String: String] = [:]
+    private(set) var chatPersonOverrides: [String: String] = [:]
+    /// Chats whose latest answer landed while the user wasn't looking (orange dot until opened).
+    private(set) var unreadChats: Set<String> = []
+    private(set) var searchIndex: SearchIndex?
+    private var catalogTask: Task<Void, Never>?
+    private var catalogLoaded = false
+
+    private var chatPeopleURL: URL { vault.dotRounds.appendingPathComponent("chat-people.json") }
+    private var unreadURL: URL { vault.dotRounds.appendingPathComponent("unread.json") }
+
+    func personForChat(_ id: String) -> String {
+        chatPersonOverrides[id] ?? chatPerson[id] ?? "_self"
+    }
+
+    func setChatPerson(_ id: String, _ slug: String) {
+        chatPersonOverrides[id] = slug
+        try? JSONEncoder().encode(chatPersonOverrides).write(to: chatPeopleURL)
+    }
+
+    func isChatUnread(_ id: String) -> Bool { unreadChats.contains(id) }
+
+    /// A chat finished a turn: flag it unread unless the user is looking at it right now.
+    func markChatFinished(_ id: String) {
+        guard !(NSApp.isActive && activeChatTab == id) else { return }
+        if unreadChats.insert(id).inserted { saveUnread() }
+    }
+
+    func markChatSeen(_ id: String) {
+        if unreadChats.remove(id) != nil { saveUnread() }
+    }
+
+    private func saveUnread() { try? JSONEncoder().encode(unreadChats).write(to: unreadURL) }
+
+    private func loadCatalogState() {
+        guard !catalogLoaded else { return }
+        catalogLoaded = true
+        if let d = try? Data(contentsOf: chatPeopleURL), let m = try? JSONDecoder().decode([String: String].self, from: d) { chatPersonOverrides = m }
+        if let d = try? Data(contentsOf: unreadURL), let u = try? JSONDecoder().decode(Set<String>.self, from: d) { unreadChats = u }
+    }
+
+    /// Re-derive chat → person and rebuild the search index off the main thread (debounced; chat files
+    /// are cached by mtime, so a rebuild after one turn re-reads only that chat).
+    func scheduleCatalogRebuild() {
+        loadCatalogState()
+        catalogTask?.cancel()
+        let vault = vault, people = people, docs = documents, steps = hypotheses, chats = chats
+        catalogTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            let built = await Task.detached(priority: .utility) {
+                Self.buildCatalog(vault: vault, people: people, docs: docs, steps: steps, chats: chats)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.chatPerson = built.0
+            self.searchIndex = built.1
+            self.unreadChats.formIntersection(Set(chats.map(\.id)))   // deleted chats drop their dot
+        }
+    }
+
+    nonisolated private static func buildCatalog(vault: VaultPaths, people: [Person], docs: [MedDocument],
+                                                 steps: [Hypothesis], chats: [ChatSummary]) -> ([String: String], SearchIndex) {
+        let names = Dictionary(people.map { ($0.slug, $0.displayName) }, uniquingKeysWith: { a, _ in a })
+        let docOwner = Dictionary(docs.map { ($0.relativePath, $0.personId) }, uniquingKeysWith: { a, _ in a })
+        let stepOwner = Dictionary(steps.map { ($0.id, $0.personId) }, uniquingKeysWith: { a, _ in a })
+        var person: [String: String] = [:]
+        var items: [SearchDoc] = []
+        for c in chats {
+            guard let parsed = ChatCatalog.parse(vault.chatsDir.appendingPathComponent("\(c.id).md")) else { continue }
+            person[c.id] = ChatCatalog.person(chatId: c.id, chat: parsed, people: people, docOwner: docOwner, stepOwner: stepOwner)
+            items.append(SearchDoc(kind: .chat, id: c.id, title: c.title, body: parsed.allText, date: c.updatedAt))
+        }
+        for d in docs {
+            let markers = d.markers.map { "\($0.name) \($0.value) \($0.unit ?? "")" }.joined(separator: "; ")
+            let body = [names[d.personId] ?? d.personId, d.docType.replacingOccurrences(of: "_", with: " "),
+                        d.testDate ?? "", d.sourceLab ?? "", d.fileName, d.summary ?? "", markers].joined(separator: " · ")
+            items.append(SearchDoc(kind: .document, id: d.relativePath, title: d.displayName, body: body, date: nil))
+        }
+        for h in steps {
+            items.append(SearchDoc(kind: .step, id: h.id, title: h.title,
+                                   body: [names[h.personId] ?? "", h.whyNow, h.body ?? ""].joined(separator: " · "), date: nil))
+        }
+        return (person, SearchIndex(items))
     }
 
     func setDisplayName(_ name: String) {
@@ -893,7 +987,7 @@ final class AppState {
         reloadChatsOnly()
     }
 
-    private func reloadChatsOnly() { chats = VaultStore.loadChats(vault) }
+    private func reloadChatsOnly() { chats = VaultStore.loadChats(vault); scheduleCatalogRebuild() }
 
     func loadTranscript(_ id: String) -> [ChatMessage] {
         let url = vault.chatsDir.appendingPathComponent("\(id).md")

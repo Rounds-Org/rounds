@@ -127,7 +127,7 @@ final class ChatRuntime: Identifiable {
     private func runQueue(first: QueuedTurn) async {
         // Only this task resets streaming state on NORMAL completion. If it was cancelled (Stop),
         // stop() already reset it — and a fresh turn may now own isStreaming, so don't clobber it.
-        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = ""; notifyFinishedIfAway() } }
+        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = ""; app.markChatFinished(id); notifyFinishedIfAway() } }
         var turn: QueuedTurn? = first
         while let t = turn, !Task.isCancelled {
             await runTurn(t.text, t.references)
@@ -228,6 +228,7 @@ final class ChatRuntime: Identifiable {
                 ? ProtocolParser.stripForDisplay(raw) : parsed.displayText
             if !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: display, timestamp: Date()))
+                app.markChatFinished(id)   // a phone-driven answer landed — dot it if nobody's looking
             }
             if !parsed.sources.isEmpty { sources = parsed.sources }
             if let a = parsed.alert { alert = a }
@@ -385,7 +386,7 @@ final class ChatRuntime: Identifiable {
         app.persistChat(id, messages, sources, sessionId, title: title)   // visible in Recent at once
         isStreaming = true
         statusLine = initialStatus; liveText = ""; trace = []
-        defer { isStreaming = false; statusLine = ""; liveText = "" }
+        defer { isStreaming = false; statusLine = ""; liveText = ""; app.markChatFinished(id) }
 
         let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
         if let sid, !sid.isEmpty { sessionId = sid }

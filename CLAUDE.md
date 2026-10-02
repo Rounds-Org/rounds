@@ -106,6 +106,8 @@ Release builds must NOT include the `com.apple.security.get-task-allow` entitlem
 <!-- auto-added 2026-06-22 -->
 The app carries `rounds.entitlements` (`CODE_SIGN_ENTITLEMENTS`, both configs) with `com.apple.security.device.audio-input` — required for microphone/voice input under the hardened runtime. `tools/notarize.sh` re-signs the bundle inside-out, and the FINAL `codesign` of the main `.app` MUST pass `--entitlements "$ROOT/rounds.entitlements"`; a bare `codesign --sign` re-seal strips entitlements and silently kills mic access in the shipped build. Keep that flag, and keep the Sparkle nested helpers re-signed WITHOUT `--entitlements` (they don't need it).
 <!-- auto-added 2026-06-27 -->
+If `xcrun notarytool` (or `tools/notarize.sh`) fails with HTTP 403, it's often not a credentials/keychain-profile problem — check for a pending Apple Developer Program agreement needing acceptance in App Store Connect first. Even after accepting, propagation can take several minutes, so poll `notarytool history` with a retry/backoff loop rather than treating the first 403 as fatal.
+<!-- auto-added 2026-10-02 -->
 
 ## macOS 14.0 deployment target and Compat.swift shims
 
@@ -207,3 +209,9 @@ Do NOT route done/dismiss/snooze/activate status changes through the brain. Call
 ## Full-power chat loads the user's own MCP servers
 
 `ClaudeRun.strictMCP`: chat runs in full power set it to `false`, so `--strict-mcp-config` is dropped and the user's MCP servers (user scope + claude.ai connectors) load alongside `rounds-sources`, exactly like `claude` in Terminal. Safe mode and background runs (hypotheses, intake, titling) keep `--strict-mcp-config`. `AppState.traceLabel` humanizes ANY tool (`mcp__<server>__<tool>` → "Server · tool: arg", Bash/Write/Agent/Skill…); failed tool results (`is_error`) mark the step "— failed" in red; a plain turn's tool steps persist on the message as a one-phase "Used N tools" timeline.
+## Sidebar = chats grouped by person; Home = documents
+
+The left rail lists CHATS grouped by the person they're about (`AppState.personForChat`: a user "Move to" override in `.rounds/chat-people.json` wins, else `ChatCatalog.person` — nextsteps-<slug>, @-refs, then name/relationship mentions in user messages + title, phrases like "мама Ани" first; nothing → `_self`). Documents live on Home (`DocumentsSection`, replaces the old "Recent chats"). Row dots: `PulsingDot` while streaming, orange `UnreadDot` when a turn finished while the user wasn't on that chat (`markChatFinished` / `markChatSeen`, persisted in `.rounds/unread.json`; cleared by `activeTab` didSet and on app activation). Same dots on center tabs.
+## Search: prebuilt index, typo-tolerant, off main thread
+
+`SearchIndex` (chats' full text, documents incl. summary+markers, next steps) is rebuilt in the background by `scheduleCatalogRebuild()` (debounced; `ChatCatalog.parse` caches chat files by mtime) after `reload()`/`persistChat`. Queries: prefix + bounded Damerau-Levenshtein vs. the vocabulary (and its prefixes), AND across words with "all-but-one" fallback, title ×3. Don't replace it with per-keystroke `contains` scans over files — that loses typo tolerance and blocks the UI. ⌘K focuses the sidebar search.

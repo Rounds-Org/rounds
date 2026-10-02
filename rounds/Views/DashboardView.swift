@@ -3,7 +3,7 @@
 //  rounds
 //
 //  Home: greeting, the main ask box, the onboarding checklist (until done), hypothesis
-//  cards (the core "next steps" entity), and recent chats.
+//  cards (the core "next steps" entity), and your documents (chats live in the sidebar).
 //
 
 import SwiftUI
@@ -34,9 +34,7 @@ struct DashboardView: View {
 
                 nextSteps
 
-                if !app.chats.isEmpty {
-                    recentChats
-                }
+                DocumentsSection()
 
                 if !archivedHypotheses.isEmpty {
                     archivedSteps
@@ -397,39 +395,6 @@ struct DashboardView: View {
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.hairline))
     }
 
-    private var recentChats: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Recent chats")
-            ForEach(app.chats.prefix(8)) { chat in
-                Button { app.openChat(chat) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "bubble.left").foregroundStyle(.secondary)
-                        Text(chat.title).lineLimit(1)
-                        Spacer()
-                        if app.isChatStreaming(chat.id) {
-                            HStack(spacing: 5) {
-                                ProgressView().controlSize(.mini)
-                                Text("working…").zfont(.caption2).foregroundStyle(Theme.accent)
-                            }
-                        } else {
-                            Text(chat.updatedAt.formatted(.relative(presentation: .named)))
-                                .zfont(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.vertical, 7).padding(.horizontal, 10)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background((app.isChatStreaming(chat.id) ? Theme.accentSoft : Theme.panel.opacity(0.6)),
-                            in: RoundedRectangle(cornerRadius: 8))
-                .contextMenu {
-                    Button("Open") { app.openChat(chat) }
-                    Divider()
-                    Button("Delete", role: .destructive) { app.deleteChat(chat.id) }
-                }
-            }
-        }
-    }
 }
 
 /// A red flag surfaced from the background next-steps lane (Principle 6). Prominent, dismissible.

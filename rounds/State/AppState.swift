@@ -137,12 +137,68 @@ final class AppState {
 
     // Center tabs: Home + chat tabs + file tabs, with most-recently-used history.
     enum CenterItem: Hashable, Identifiable {
-        case home, chat(String), file(String)
-        var id: String { switch self { case .home: "home"; case .chat(let i): "c:" + i; case .file(let p): "f:" + p } }
+        case home, chat(String), file(String), whatsNew
+        var id: String {
+            switch self {
+            case .home: "home"; case .chat(let i): "c:" + i; case .file(let p): "f:" + p; case .whatsNew: "whatsnew"
+            }
+        }
     }
     var openTabs: [CenterItem] = [.home]
     var activeTab: CenterItem = .home {
-        didSet { if case .chat(let id) = activeTab, NSApp.isActive { markChatSeen(id) } }
+        didSet {
+            if case .chat(let id) = activeTab, NSApp.isActive { markChatSeen(id) }
+            // Browser-style ← → history: every real navigation pushes where we came from.
+            if oldValue != activeTab, !navigatingHistory {
+                backStack.append(oldValue)
+                if backStack.count > 100 { backStack.removeFirst() }
+                forwardStack.removeAll()
+            }
+        }
+    }
+    private(set) var backStack: [CenterItem] = []
+    private(set) var forwardStack: [CenterItem] = []
+    private var navigatingHistory = false
+    var canGoBack: Bool { backStack.contains { isNavigable($0) } }
+    var canGoForward: Bool { forwardStack.contains { isNavigable($0) } }
+
+    /// A history entry is still reachable (a closed file tab or a deleted chat is skipped).
+    private func isNavigable(_ item: CenterItem) -> Bool {
+        switch item {
+        case .home, .whatsNew: return true
+        case .chat(let id): return chats.contains { $0.id == id } || chatRuntimes[id] != nil
+        case .file(let p): return openFileDocs[p] != nil || documents.contains { $0.relativePath == p }
+        }
+    }
+
+    func goBack() { step(from: &backStack, to: &forwardStack) }
+    func goForward() { step(from: &forwardStack, to: &backStack) }
+
+    private func step(from: inout [CenterItem], to: inout [CenterItem]) {
+        while let target = from.popLast() {
+            guard isNavigable(target), target != activeTab else { continue }
+            to.append(activeTab)
+            navigatingHistory = true
+            if case .file(let p) = target, openFileDocs[p] == nil, let d = documents.first(where: { $0.relativePath == p }) {
+                openFileDocs[p] = d
+            }
+            selectTab(target)
+            navigatingHistory = false
+            return
+        }
+    }
+
+    // Overlays driven from anywhere (⌘K, the Rounds menu, the sidebar).
+    var showPalette = false
+    var showImporter = false
+    var showShortcuts = false
+
+    /// Open "What's new" for this build once after an update (not on a fresh install).
+    func showWhatsNewIfUpdated() {
+        let current = UpdateService.currentAppVersion
+        let last = VaultStore.readString("lastSeenVersion", vault)
+        VaultStore.writeString("lastSeenVersion", current, vault)
+        if let last, !last.isEmpty, last != current { selectTab(.whatsNew) }
     }
     private var tabHistory: [CenterItem] = [.home]   // index 0 = most recent
     var openFileDocs: [String: MedDocument] = [:]    // relativePath -> doc
@@ -358,6 +414,7 @@ final class AppState {
         startPermissionWatcher()       // watch for tool-permission requests from the hook
         booted = true
         setUpUpdater()   // wire Sparkle's auto-updater to the banner + start background checks
+        showWhatsNewIfUpdated()
 
         // Self-heal: if existing next-step cards were generated in a different language than the
         // user's current answer language, quietly rewrite them into it (once — guarded by a stamp).
@@ -433,9 +490,6 @@ final class AppState {
     }
 
     // MARK: - Chat catalog: group-by-person, unread dots, search
-
-    /// Bumped by ⌘K to focus the sidebar search field.
-    var searchFocusRequest = 0
 
     /// Auto-derived "who is this chat about" (ChatCatalog). A user override always wins.
     var chatPerson: [String: String] = [:]

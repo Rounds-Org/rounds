@@ -11,6 +11,8 @@ import SwiftUI
 struct roundsApp: App {
     @State private var app = AppState()
 
+    init() { HandFont.register() }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -23,6 +25,7 @@ struct roundsApp: App {
                 }
                 .frame(minWidth: 1080, minHeight: 720)
         }
+        .windowStyle(.hiddenTitleBar)   // Yab-style: traffic lights sit in the sidebar, no title strip
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { app.startNewChat() }
@@ -48,8 +51,12 @@ struct roundsApp: App {
                     .keyboardShortcut(.tab, modifiers: .control)
                 Button("Previous Tab") { app.cycleTab(forward: false) }
                     .keyboardShortcut(.tab, modifiers: [.control, .shift])
-                Button("Search…") { app.searchFocusRequest += 1 }
+                Button("Search or Ask…") { app.showPalette.toggle() }
                     .keyboardShortcut("k", modifiers: .command)
+                Button("Back") { app.goBack() }
+                    .keyboardShortcut("[", modifiers: .command)
+                Button("Forward") { app.goForward() }
+                    .keyboardShortcut("]", modifiers: .command)
                 Button("Settings…") { app.showSettings = true }
                     .keyboardShortcut(",", modifiers: .command)
                 Divider()

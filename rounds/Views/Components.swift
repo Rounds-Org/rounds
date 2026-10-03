@@ -7,9 +7,24 @@
 //
 
 import SwiftUI
+import CoreText
 
 enum Theme {
-    static let bg = Color(nsColor: .windowBackgroundColor)
+    /// The page (center card) surface. Yab-style: a near-white card sitting on a slightly darker canvas.
+    static let bg = dynamic(light: (0.984, 0.984, 0.980), dark: (0.157, 0.157, 0.165))
+    /// The window canvas the sidebar sits on and the card floats over.
+    static let canvas = dynamic(light: (0.929, 0.929, 0.922), dark: (0.110, 0.110, 0.118))
+    /// Sidebar row hover / selection fills.
+    static let rowHover = Color.primary.opacity(0.05)
+    static let rowActive = Color.primary.opacity(0.075)
+    static let unread = Color(red: 0.94, green: 0.54, blue: 0.14)
+
+    private static func dynamic(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> Color {
+        Color(nsColor: NSColor(name: nil) { a in
+            let c = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
+    }
     static let panel = Color(nsColor: .controlBackgroundColor)
     static let accent = Color(red: 0.337, green: 0.584, blue: 0.404)   // Rounds green #569567
     static let accentSoft = Color(red: 0.337, green: 0.584, blue: 0.404).opacity(0.12)
@@ -345,5 +360,43 @@ struct Pill: View {
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(color.opacity(0.14), in: Capsule())
             .foregroundStyle(color)
+    }
+}
+
+
+// MARK: - Handwritten accent (Caveat, OFL — bundled in Resources/Fonts)
+
+enum HandFont {
+    /// Register the bundled Caveat font once at launch (no Info.plist entry needed).
+    static func register() {
+        guard let url = Bundle.main.url(forResource: "Caveat", withExtension: "ttf") else { return }
+        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
+}
+
+extension View {
+    /// The handwritten green note style (update nudge, "the latest"…). Use sparingly.
+    func handwritten(_ size: CGFloat, color: Color = Theme.accent) -> some View {
+        self.font(.custom("Caveat", size: size).weight(.bold)).foregroundStyle(color)
+    }
+}
+
+/// The paper dot grid behind Home and empty states.
+struct DotGrid: View {
+    var spacing: CGFloat = 14
+    var body: some View {
+        Canvas { ctx, size in
+            let dot = Path(ellipseIn: CGRect(x: 0, y: 0, width: 1.6, height: 1.6))
+            var y: CGFloat = spacing / 2
+            while y < size.height {
+                var x: CGFloat = spacing / 2
+                while x < size.width {
+                    ctx.fill(dot.offsetBy(dx: x, dy: y), with: .color(.primary.opacity(0.07)))
+                    x += spacing
+                }
+                y += spacing
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

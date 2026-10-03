@@ -2,9 +2,9 @@
 //  ContentView.swift
 //  rounds
 //
-//  Root layout: file tree (left) · tabbed center (Home/Chat + open file tabs) · sources
-//  (right, only when there are sources), with the update banner, disclaimer chin, and the
-//  onboarding / intake / settings overlays.
+//  Root layout: the sidebar (also the tab strip) on the window canvas · the center page as a rounded
+//  card (Home / chat / document / what's new) with sources inside it when there are any · the ⌘K
+//  palette, onboarding / intake / settings overlays.
 //
 
 import SwiftUI
@@ -25,6 +25,8 @@ struct ContentView: View {
         app.activeChatTab != nil && (!app.currentSources.isEmpty || app.sourcesWarning != nil)
     }
 
+    @State private var shortcutMonitor: Any?
+
     var body: some View {
         // ⌘+/⌘− text zoom: every `.zfont(...)` reads this scale and renders a REAL scaled font, so
         // the layout reflows naturally and — because there's no transform — clicks always land
@@ -32,6 +34,18 @@ struct ContentView: View {
         scaledContent
             .environment(\.zoomScale, app.uiScale)
             .preferredColorScheme(app.preferredColorScheme)
+            .onAppear {
+                // ⌘K must work while a text editor has focus (the menu shortcut alone doesn't reach
+                // through the chat input), so catch it at the window's event stream.
+                guard shortcutMonitor == nil else { return }
+                shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+                    let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "k" || e.keyCode == 40 {
+                        app.showPalette.toggle(); return nil
+                    }
+                    return e
+                }
+            }
     }
 
     private var scaledContent: some View {
@@ -117,15 +131,18 @@ struct ContentView: View {
         }
     }
 
+    @AppStorage("rounds.sidebarWidth") private var sidebarWidth: Double = 280
+
+    /// Yab-style window: the sidebar sits on the canvas (it IS the tab strip — there's no top tab bar),
+    /// and the page floats beside it as a rounded card. Sources lives INSIDE the card (not as another
+    /// pane) so showing/hiding it never resizes the sidebar — only the chat gives up width.
     private var mainView: some View {
-        VStack(spacing: 0) {
-            engineNoticeBar
-            // Two top-level panes only: the sidebar, and the center region. Sources lives INSIDE
-            // the center region (not as a third pane) so showing/hiding it can never resize the
-            // sidebar — only the chat area gives up width to the sources column.
-            HSplitView {
-                SidebarView()
-                    .frame(minWidth: 250, idealWidth: 290, maxWidth: 380)
+        HStack(spacing: 0) {
+            SidebarView()
+                .frame(width: sidebarWidth)
+                .overlay(alignment: .trailing) { resizeHandle }
+            VStack(spacing: 0) {
+                engineNoticeBar
                 HStack(spacing: 0) {
                     CenterPane()
                         .frame(minWidth: 420, maxWidth: .infinity)
@@ -136,13 +153,37 @@ struct ContentView: View {
                             .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
-                .frame(minWidth: 460)
+                .frame(maxHeight: .infinity)
                 .animation(.easeInOut(duration: 0.18), value: showSources)
+                DisclaimerChin()
             }
-            .frame(maxHeight: .infinity)
-            DisclaimerChin()
+            .background(Theme.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .shadow(color: .black.opacity(0.06), radius: 1, y: 0.5)
+            .shadow(color: .black.opacity(0.06), radius: 14, y: 4)
+            .padding(.vertical, 8).padding(.trailing, 8)
+            .frame(minWidth: 460)
         }
-        .background(Theme.bg)
+        .background(Theme.canvas)
+        .ignoresSafeArea(.container, edges: .top)   // the sidebar runs up under the hidden title bar
+        .overlay { if app.showPalette { CommandPalette() } }
+        .fileImporter(isPresented: Binding(get: { app.showImporter }, set: { app.showImporter = $0 }),
+                      allowedContentTypes: [.pdf, .image, .plainText, .item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { app.beginImport(urls) }
+        }
+        .sheet(isPresented: Binding(get: { app.showShortcuts }, set: { app.showShortcuts = $0 })) { ShortcutsSheet() }
+    }
+
+    /// Drag the sidebar's right edge to resize it.
+    private var resizeHandle: some View {
+        Color.clear
+            .frame(width: 8)
+            .contentShape(Rectangle())
+            .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .gesture(DragGesture(minimumDistance: 1).onChanged { v in
+                sidebarWidth = min(400, max(220, sidebarWidth + v.translation.width))
+            })
+            .offset(x: 4)
     }
 
     private func handleDrop(_ providers: [NSItemProvider], toChat: Bool) {
@@ -263,156 +304,14 @@ struct IntakeBox: Identifiable, Equatable {
 private struct CenterPane: View {
     @Environment(AppState.self) private var app
     var body: some View {
-        VStack(spacing: 0) {
-            if app.openTabs.count > 1 { CenterTabBar() }
-            Group {
-                switch app.activeTab {
-                case .home: DashboardView()
-                case .chat: ChatView()
-                case .file(let p):
-                    if let doc = app.openFileDocs[p] { FileTabContent(doc: doc) }
-                    else { DashboardView() }
-                }
-            }
-        }
-    }
-}
-
-private struct CenterTabBar: View {
-    @Environment(AppState.self) private var app
-    @State private var draggingId: String?
-    @State private var dragDX: CGFloat = 0
-    @State private var startMid: [String: CGFloat] = [:]   // tab centers snapshotted at drag start
-    @State private var liveMid: [String: CGFloat] = [:]    // live tab centers
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    ForEach(displayOrder, id: \.id) { item in
-                        TabView(item: item)
-                            .id(item.id)
-                            .opacity(draggingId == item.id ? 0.55 : 1)   // translucent while dragging
-                            .scaleEffect(draggingId == item.id ? 1.04 : 1)
-                            .zIndex(draggingId == item.id ? 1 : 0)
-                            .background(GeometryReader { g in
-                                let m = g.frame(in: .named("tabbar")).midX
-                                Color.clear.onAppear { liveMid[item.id] = m }
-                                    .onChange(of: m) { _, v in liveMid[item.id] = v }
-                            })
-                            .gesture(dragGesture(item))
-                    }
-                }
-                .coordinateSpace(name: "tabbar")
-                .animation(.easeInOut(duration: 0.18), value: displayOrder.map(\.id))
-            }
-            .onChange(of: app.activeTab) { _, tab in
-                if draggingId == nil { withAnimation { proxy.scrollTo(tab.id, anchor: .center) } }
-            }
-            .onAppear { proxy.scrollTo(app.activeTab.id, anchor: .center) }
-        }
-        .background(Theme.panel.opacity(0.6))
-        .overlay(Divider(), alignment: .bottom)
-    }
-
-    /// Lowest index a tab may land at (after a pinned Home).
-    private var lowBound: Int { app.openTabs.first == .home ? 1 : 0 }
-
-    private var targetIndex: Int? {
-        guard let id = draggingId, let sm = startMid[id] else { return nil }
-        let center = sm + dragDX
-        let n = app.openTabs.filter { $0.id != id }.filter { (startMid[$0.id] ?? .infinity) < center }.count
-        return max(lowBound, min(n, app.openTabs.count - 1))
-    }
-
-    private var displayOrder: [AppState.CenterItem] {
-        guard let id = draggingId, let t = targetIndex,
-              let from = app.openTabs.firstIndex(where: { $0.id == id }) else { return app.openTabs }
-        var arr = app.openTabs
-        let it = arr.remove(at: from)
-        arr.insert(it, at: max(0, min(t, arr.count)))
-        return arr
-    }
-
-    private func dragGesture(_ item: AppState.CenterItem) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named("tabbar"))
-            .onChanged { v in
-                guard item != .home else { return }   // Home is pinned
-                if draggingId == nil { draggingId = item.id; startMid = liveMid }
-                if draggingId == item.id { dragDX = v.translation.width }
-            }
-            .onEnded { _ in
-                if let id = draggingId, let t = targetIndex,
-                   let from = app.openTabs.firstIndex(where: { $0.id == id }), from != t {
-                    app.moveTab(from: from, to: t)
-                }
-                draggingId = nil; dragDX = 0
-            }
-    }
-
-    private struct TabView: View {
-        @Environment(AppState.self) private var app
-        let item: AppState.CenterItem
-        @State private var hover = false
-
-        var body: some View {
-            HStack(spacing: 6) {
-                if app.tabIsStreaming(item) {
-                    PulsingDot()
-                } else if case .chat(let id) = item, app.isChatUnread(id) {
-                    UnreadDot()
-                } else {
-                    Image(systemName: icon).zfont(.caption2)
-                }
-                Text(title).zfont(.caption).lineLimit(1)
-                if item != .home {
-                    Button { app.closeTab(item) } label: { Image(systemName: "xmark").zfont(size: 9) }
-                        .buttonStyle(.borderless)
-                        .opacity(hover || isActive ? 1 : 0)
-                }
-            }
-            .padding(.horizontal, 11).padding(.vertical, 7)
-            .frame(maxWidth: 190)
-            .background(isActive ? Theme.bg : .clear)
-            .overlay(alignment: .bottom) { if isActive { Rectangle().fill(Theme.accent).frame(height: 2) } }
-            .foregroundStyle(isActive ? .primary : .secondary)
-            .contentShape(Rectangle())
-            .onTapGesture { app.selectTab(item) }
-            .onHover { hover = $0 }
-            .overlay(Divider(), alignment: .trailing)
-            .contextMenu { contextMenu }
-        }
-
-        private var isActive: Bool { app.activeTab == item }
-
-        @ViewBuilder private var contextMenu: some View {
-            if case .file(let p) = item, let doc = app.openFileDocs[p] {
-                Button("Open in Preview app") { app.openInExternalPreview(doc) }
-                Button("Reveal in Finder") { app.revealInFinder(doc) }
-                Divider()
-                Button("Close Tab") { app.closeTab(item) }
-            } else if case .chat(let id) = item {
-                Button("Copy title") { app.copyChatTitle(id) }
-                Button("Copy whole chat") { app.copyChatTranscript(id) }
-                Divider()
-                Button("Close Tab") { app.closeTab(item) }
-            } else if item != .home {
-                Button("Close Tab") { app.closeTab(item) }
-            }
-        }
-
-        private var title: String {
-            switch item {
-            case .home: "Home"
-            case .chat(let id): app.chatTitle(id)
-            case .file(let p): app.openFileDocs[p]?.displayName ?? "File"
-            }
-        }
-        private var icon: String {
-            switch item {
-            case .home: "house"
-            case .chat: "bubble.left"
-            case .file(let p): (app.openFileDocs[p]?.isImaging ?? false) ? "photo" : "doc.text"
+        Group {
+            switch app.activeTab {
+            case .home: DashboardView()
+            case .chat: ChatView()
+            case .whatsNew: WhatsNewView()
+            case .file(let p):
+                if let doc = app.openFileDocs[p] { FileTabContent(doc: doc) }
+                else { DashboardView() }
             }
         }
     }
@@ -425,36 +324,6 @@ struct PulsingDot: View {
             .opacity(on ? 1 : 0.3)
             .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }
-    }
-}
-
-/// Compact update chip shown at the bottom of the sidebar.
-struct UpdateChip: View {
-    @Environment(AppState.self) private var app
-    let update: UpdateInfo
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Theme.accent)
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Update available").zfont(.caption, .medium)
-                Text("Version \(update.latestVersion)").zfont(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Update") {
-                Analytics.track(.updateBannerClicked)
-                SparkleUpdater.shared.checkForUpdates()
-            }
-            .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
-            if !update.mandatory {
-                Button { app.dismissUpdate() } label: { Image(systemName: "xmark").zfont(.caption2) }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 10).padding(.bottom, 10)
-        .onAppear { Analytics.track(.updateBannerShown) }
     }
 }
 

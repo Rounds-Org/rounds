@@ -48,6 +48,7 @@ struct DashboardView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
+        .background(DotGrid())   // paper dot grid, Yab-style
         .background(Theme.bg)
     }
 

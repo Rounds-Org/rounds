@@ -82,6 +82,8 @@ nonisolated final class WarmSession: @unchecked Sendable {
         // Hard-cap the evidence tiers the sources MCP returns for this warm process (1…4). A stage
         // change respawns the warm session (see ChatRuntime.ensureWarm) so this stays in sync.
         env["ROUNDS_RESEARCH_STAGE"] = String(config.researchStage.index)
+        env["ROUNDS_VAULT"] = config.cwd.path
+        if let c = config.chatId { env["ROUNDS_CHAT_ID"] = c }
         proc.environment = env
 
         proc.standardInput = stdinPipe

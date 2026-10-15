@@ -41,7 +41,11 @@ final class AppState {
     var people: [Person] = []
     var documents: [MedDocument] = []
     var hypotheses: [Hypothesis] = []
-    var chats: [ChatSummary] = []
+    var chats: [ChatSummary] = [] {
+        didSet { chatIndex = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
+    }
+    /// id → summary, so per-row lookups (sidebar, titles) are O(1) instead of scanning `chats`.
+    private(set) var chatIndex: [String: ChatSummary] = [:]
     var displayName: String = ""
 
     // Model
@@ -166,7 +170,7 @@ final class AppState {
     private func isNavigable(_ item: CenterItem) -> Bool {
         switch item {
         case .home, .whatsNew: return true
-        case .chat(let id): return chats.contains { $0.id == id } || chatRuntimes[id] != nil
+        case .chat(let id): return chatIndex[id] != nil || chatRuntimes[id] != nil
         case .file(let p): return openFileDocs[p] != nil || documents.contains { $0.relativePath == p }
         }
     }
@@ -215,9 +219,11 @@ final class AppState {
         chatRuntimes[id] = r
         return r
     }
-    var activeRuntime: ChatRuntime? { activeChatTab.map { runtime($0) } }
+    /// The open chat's runtime. Read-only lookup (never creates one) so it is safe to call from a view
+    /// body; `selectTab` / `openChat` make sure the runtime exists before the chat is shown.
+    var activeRuntime: ChatRuntime? { activeChatTab.flatMap { chatRuntimes[$0] } }
     func isChatStreaming(_ id: String) -> Bool { chatRuntimes[id]?.isStreaming ?? false }
-    func chatTitle(_ id: String) -> String { chatRuntimes[id]?.title ?? chats.first { $0.id == id }?.title ?? "New chat" }
+    func chatTitle(_ id: String) -> String { chatRuntimes[id]?.title ?? chatIndex[id]?.title ?? "New chat" }
     var anyChatStreaming: Bool { chatRuntimes.values.contains { $0.isStreaming } }
 
     // Read-only proxies for the displayed chat (so views read app.messages etc).
@@ -251,19 +257,29 @@ final class AppState {
         return "Claude usage limit reached. \(snippet)\n\nCheck your plan or credits in your Claude account, then try again."
     }
 
-    // Next-steps run in the BACKGROUND in their own lane — they never touch the chat
-    // streaming state (isStreaming/liveText/messages), so chats stay clean and you can
-    // keep chatting while they refresh.
-    var identifyingNextSteps = false
-    var nextStepsStatus = ""
-    var nextStepsGeneratingSlug: String?   // person currently being generated — so the status link opens the RIGHT chat
-    var nextStepsTrace: [String] = []
-    var urgentBanner: RoundsAlert?      // a red flag surfaced from the background next-steps lane
-    var answeringStep: String?          // id of a question-step currently being answered (card spinner)
+    // The plan: one problem list per person (problems → next steps), shared by every session.
+    // Claude sessions edit it through the rounds-sources `problems_update` tool; the app edits it for
+    // deterministic actions (ProblemStore). There is no separate "next-steps generator" any more —
+    // every change happens inside an ordinary chat that follows the rules in the vault CLAUDE.md.
+    var problemLists: [ProblemList] = []
+    var problems: [Problem] { problemLists.flatMap(\.problems) }
+    /// person slug → the background chat currently updating that person's plan (review / answer / filing).
+    var busyPeople: [String: String] = [:]
+    /// The one-time "move legacy next steps into problems" chat, while it runs.
+    var migrationChatId: String?
+    var urgentBanner: RoundsAlert?      // a red flag surfaced from a background chat or a Home answer
+    var answeringStep: String?          // id of a question-step currently being recorded (card spinner)
 
-    // Pre-filled chat input (for "Chat about this" / "Explain in new chat").
-    var pendingChatDraft: String = ""
-    var pendingReferences: [Reference] = []
+    func problemList(_ slug: String) -> ProblemList? { problemLists.first { $0.personId == slug } }
+    /// Legacy flat cards still shown for a person whose list hasn't been organized into problems yet.
+    func legacyOpenSteps(_ slug: String) -> [Hypothesis] {
+        guard problemList(slug)?.migratedLegacy != true else { return [] }
+        return hypotheses.filter { $0.personId == slug && $0.isOpenStep }
+    }
+    func isPersonBusy(_ slug: String) -> Bool {
+        migratingPeople.contains(slug) || (busyPeople[slug].map { isChatStreaming($0) } ?? false)
+    }
+
 
     // Settings
     var language = "Auto (match the user)"  // language Claude Code answers in
@@ -392,8 +408,9 @@ final class AppState {
             // Still scaffold the vault so the UI has somewhere to live.
             try? vault.ensureScaffold()
         }
-        VaultStore.reconcileAllStaged(vault)   // repair any filed-but-stranded raw files in inbox
-        reload()
+        let v = vault
+        await Task.detached(priority: .userInitiated) { VaultStore.reconcileAllStaged(v) }.value   // repair filed-but-stranded raws
+        await reloadAsync()
         if let raw = VaultStore.readString("model", vault), !raw.isEmpty {
             selectedModel = RoundsModel(rawValue: raw)
         }
@@ -410,21 +427,16 @@ final class AppState {
             permissionMode = m
         }
         showOnboarding = VaultStore.readString("onboardingDone", vault) != "1"
-        writeEffectiveSettings()       // settings file Rounds passes (adds the permission hook in full mode)
-        startPermissionWatcher()       // watch for tool-permission requests from the hook
+        writeEffectiveSettings()       // settings file Rounds passes (no hook: the permission dialog is dormant)
         booted = true
         setUpUpdater()   // wire Sparkle's auto-updater to the banner + start background checks
         showWhatsNewIfUpdated()
-
-        // Self-heal: if existing next-step cards were generated in a different language than the
-        // user's current answer language, quietly rewrite them into it (once — guarded by a stamp).
-        if !hypotheses.isEmpty, !language.hasPrefix("Auto"),
-           VaultStore.readString("hypothesesLanguage", vault) != answerLanguageDescriptor {
-            let actions = hypotheses.map { StepAction(id: $0.id, action: "relanguage") }
-            Task {
-                await applyStepActions(actions)
-                VaultStore.writeString("hypothesesLanguage", answerLanguageDescriptor, vault)
-            }
+        startProblemWatcher()
+        migrateLegacyIfNeeded()
+        // Developer hook (never set for users): ROUNDS_DEV_IMPORT="/path/a.pdf:/path/b.jpg" files those
+        // documents on launch — lets the filing → plan-update flow be tested without the file picker.
+        if let paths = ProcessInfo.processInfo.environment["ROUNDS_DEV_IMPORT"], !paths.isEmpty {
+            beginImport(paths.split(separator: ":").map { URL(fileURLWithPath: String($0)) })
         }
     }
 
@@ -479,13 +491,28 @@ final class AppState {
         reload()
     }
 
-    func reload() {
-        let snap = VaultStore.load(vault)
-        people = snap.people
-        documents = snap.documents
-        hypotheses = snap.hypotheses
-        chats = snap.chats
-        displayName = snap.displayName
+    /// Re-read the vault. The disk scan (every person, sidecar, step and chat header) runs OFF the
+    /// main thread; results are applied only if no newer reload started meanwhile, and only the
+    /// collections that actually changed are assigned (so unchanged views don't re-render).
+    func reload() { Task { await reloadAsync() } }
+
+    private var reloadGeneration = 0
+    func reloadAsync() async {
+        reloadGeneration += 1
+        let gen = reloadGeneration
+        let v = vault
+        let snap = await Task.detached(priority: .userInitiated) { VaultStore.load(v) }.value
+        guard gen == reloadGeneration else { return }
+        applySnapshot(snap)
+    }
+
+    private func applySnapshot(_ snap: VaultSnapshot) {
+        if people != snap.people { people = snap.people }
+        if documents != snap.documents { documents = snap.documents }
+        if hypotheses != snap.hypotheses { hypotheses = snap.hypotheses }
+        if chats != snap.chats { chats = snap.chats }
+        if problemLists != snap.problemLists { problemLists = snap.problemLists }
+        if displayName != snap.displayName { displayName = snap.displayName }
         scheduleCatalogRebuild()
     }
 
@@ -538,12 +565,12 @@ final class AppState {
     func scheduleCatalogRebuild() {
         loadCatalogState()
         catalogTask?.cancel()
-        let vault = vault, people = people, docs = documents, steps = hypotheses, chats = chats
+        let vault = vault, people = people, docs = documents, steps = hypotheses, probs = problems, chats = chats
         catalogTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             let built = await Task.detached(priority: .utility) {
-                Self.buildCatalog(vault: vault, people: people, docs: docs, steps: steps, chats: chats)
+                Self.buildCatalog(vault: vault, people: people, docs: docs, steps: steps, problems: probs, chats: chats)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.chatPerson = built.0
@@ -553,10 +580,13 @@ final class AppState {
     }
 
     nonisolated private static func buildCatalog(vault: VaultPaths, people: [Person], docs: [MedDocument],
-                                                 steps: [Hypothesis], chats: [ChatSummary]) -> ([String: String], SearchIndex) {
+                                                 steps legacySteps: [Hypothesis], problems: [Problem],
+                                                 chats: [ChatSummary]) -> ([String: String], SearchIndex) {
         let names = Dictionary(people.map { ($0.slug, $0.displayName) }, uniquingKeysWith: { a, _ in a })
         let docOwner = Dictionary(docs.map { ($0.relativePath, $0.personId) }, uniquingKeysWith: { a, _ in a })
-        let stepOwner = Dictionary(steps.map { ($0.id, $0.personId) }, uniquingKeysWith: { a, _ in a })
+        let steps = legacySteps.filter(\.isOpenStep) + problems.flatMap(\.steps)
+        var stepOwner = Dictionary(steps.map { ($0.id, $0.personId) }, uniquingKeysWith: { a, _ in a })
+        for p in problems { stepOwner[p.id] = p.personId }
         var person: [String: String] = [:]
         var items: [SearchDoc] = []
         for c in chats {
@@ -569,6 +599,10 @@ final class AppState {
             let body = [names[d.personId] ?? d.personId, d.docType.replacingOccurrences(of: "_", with: " "),
                         d.testDate ?? "", d.sourceLab ?? "", d.fileName, d.summary ?? "", markers].joined(separator: " · ")
             items.append(SearchDoc(kind: .document, id: d.relativePath, title: d.displayName, body: body, date: nil))
+        }
+        for p in problems {
+            items.append(SearchDoc(kind: .step, id: p.id, title: p.title,
+                                   body: [names[p.personId] ?? "", p.summary].joined(separator: " · "), date: nil))
         }
         for h in steps {
             items.append(SearchDoc(kind: .step, id: h.id, title: h.title,
@@ -614,8 +648,9 @@ final class AppState {
     }
 
     /// Read-only chat run config used by ChatRuntime.
-    func chatRun(prompt: String = "", resume: String? = nil, stage: RoundsResearchStage? = nil) -> ClaudeRun {
+    func chatRun(prompt: String = "", resume: String? = nil, stage: RoundsResearchStage? = nil, chatId: String? = nil) -> ClaudeRun {
         var run = baseRun(prompt: prompt, policy: .readOnly, resume: resume, stage: stage)
+        run.chatId = chatId
         // Full power chat = Claude Code as in Terminal: the user's own MCP servers (Gmail, Drive,
         // anything from `claude mcp add`) load next to rounds-sources. Safe mode stays Rounds-only.
         run.strictMCP = !fullPowerActive
@@ -631,6 +666,17 @@ final class AppState {
 
     func showToast(_ s: String) { toast = s }
 
+    /// A chat finished its turn(s). Background plan chats refresh Home; the one-time migration chat
+    /// hands Home over from the legacy cards to the problem lists.
+    func chatTurnsFinished(_ id: String) {
+        if busyPeople.values.contains(id) || migrationChatId == id { reloadProblems() }
+        if migrationChatId == id {
+            migrationChatId = nil
+            migratingPeople = []
+            Task { await reloadAsync() }
+        }
+    }
+
     /// DETERMINISTIC Principle-6 net (Phase 0). Scans free text for curated red-flag patterns
     /// BEFORE the model reasons and, on a match, raises the urgent banner regardless of model
     /// output. A non-match is NOT reassurance — the brain still says it rules nothing out.
@@ -639,9 +685,6 @@ final class AppState {
         guard let m = RedFlagDetector.detect(text) else { return false }
         urgentBanner = m.asAlert
         return true
-    }
-    func beginHypotheses() {
-        Task { await generateHypotheses() }   // background lane; self-guards re-entry
     }
     func beginImport(_ urls: [URL]) {
         // A drop can include FOLDERS (the user dragged a directory). Expand each into the supported
@@ -745,6 +788,8 @@ final class AppState {
         case "mcp__rounds-sources__find_trials": return with("Searched clinical trials", arg)
         case "mcp__rounds-sources__drug_label": return with("Looked up the drug label", arg)
         case "mcp__rounds-sources__rank_sources": return "Ranked the sources by trust"
+        case "mcp__rounds-sources__problems_get": return "Read the plan"
+        case "mcp__rounds-sources__problems_update": return "Updated the plan"
         case "Read": return with("Read", file ?? "a document")
         case "Write": return with("Wrote", file ?? "a file")
         case "Edit", "MultiEdit", "NotebookEdit": return with("Edited", file ?? "a file")
@@ -850,59 +895,14 @@ final class AppState {
         selectTab(.chat(summary.id))
     }
 
-    /// The person next-steps generation targets first (most documents; `_self` fallback).
-    var primaryPersonSlug: String {
-        let counts = Dictionary(grouping: documents, by: { $0.personId }).mapValues { $0.count }
-        return counts.keys.sorted { counts[$0]! > counts[$1]! }.first ?? "_self"
-    }
-
-    /// Open the next-steps GENERATION chat (the live Claude Code session) for the primary person —
-    /// Rounds is a client over Claude Code, so the user can watch/continue that session like any chat.
-    func openNextStepsChat() { selectTab(.chat("nextsteps-\(nextStepsGeneratingSlug ?? primaryPersonSlug)")) }
-
-    /// A chat surfaced a NEW or revised next step. The chat is read-only, so the APP persists the
-    /// parsed hypotheses to files (so they appear on the dashboard), then reloads. Returns the saved
-    /// steps so the chat can show them inline.
-    @discardableResult
-    func persistChatHypotheses(_ hyps: [Hypothesis], sessionId: String?, sources: [Source] = []) -> [Hypothesis] {
-        guard !hyps.isEmpty else { return [] }
-        var saved: [Hypothesis] = []
-        for var h in hyps {
-            if h.personId.isEmpty { h.personId = "_self" }
-            if h.status.isEmpty { h.status = "proposed" }
-            if h.sessionId == nil { h.sessionId = sessionId }
-            if h.sources.isEmpty, !sources.isEmpty { h.sources = Self.sourcesFor(h, from: sources) }
-            VaultStore.saveHypothesis(h, vault)
-            saved.append(h)
-        }
-        reload()
-        return saved
-    }
-
-    /// The turn's sources this hypothesis cites (by [S#] in its title/whyNow/body) so the "N sources"
-    /// chip has real, clickable citations. Falls back to the first `sourceCount` sources if the card
-    /// carries a count but no inline [S#] markers.
-    static func sourcesFor(_ h: Hypothesis, from turn: [Source]) -> [Source] {
-        let text = "\(h.title) \(h.whyNow) \(h.body ?? "")"
-        var ids = Set<String>()
-        if let re = try? NSRegularExpression(pattern: #"\[S(\d+)\]"#) {
-            let ns = text as NSString
-            re.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-                if let m, let r = Range(m.range(at: 1), in: text) { ids.insert("S" + text[r]) }
-            }
-        }
-        let cited = turn.filter { ids.contains($0.id) }
-        if !cited.isEmpty { return cited }
-        return h.sourceCount > 0 ? Array(turn.prefix(h.sourceCount)) : []
-    }
-
     func deleteChat(_ id: String) {
         chatRuntimes[id]?.stop()
         chatRuntimes[id] = nil
         try? FileManager.default.removeItem(at: vault.chatsDir.appendingPathComponent("\(id).md"))
         try? FileManager.default.removeItem(at: vault.chatsDir.appendingPathComponent("\(id).sources.json"))
         closeTab(.chat(id))
-        chats = VaultStore.loadChats(vault)
+        chats.removeAll { $0.id == id }
+        scheduleCatalogRebuild()
     }
 
     // MARK: - @-mentions
@@ -914,7 +914,9 @@ final class AppState {
         out += people.map { Reference(kind: .person, id: $0.slug, label: $0.displayName) }
         out += documents.map { Reference(kind: .file, id: $0.relativePath,
                                          label: $0.displayName + ($0.testDate.map { " · \($0)" } ?? "")) }
-        out += hypotheses.map { Reference(kind: .step, id: $0.id, label: $0.title) }
+        out += problems.filter(\.isOpen).map { Reference(kind: .problem, id: $0.id, label: $0.title) }
+        out += problems.flatMap(\.openSteps).map { Reference(kind: .step, id: $0.id, label: $0.title) }
+        out += people.flatMap { legacyOpenSteps($0.slug) }.map { Reference(kind: .step, id: $0.id, label: $0.title) }
         out += chats.prefix(20).map { Reference(kind: .chat, id: $0.id, label: $0.title) }
         let filtered = q.isEmpty ? out : out.filter { $0.label.lowercased().contains(q) || $0.kind.rawValue.contains(q) }
         return Array(filtered.prefix(8))
@@ -931,7 +933,14 @@ final class AppState {
             case .person:
                 lines.append("- Person \"\(r.label)\": read people/\(r.id)/CLAUDE.md and the documents in people/\(r.id)/documents/.")
             case .step:
-                lines.append("- Next step \"\(r.label)\" (id \(r.id)): read its hypothesis.md under people/*/hypotheses/\(r.id)/. The user may want to discuss it, refine it, or decide it's done/no longer relevant — if so, update its status accordingly.")
+                if let step = problems.flatMap(\.steps).first(where: { $0.id == r.id }) {
+                    lines.append("- Next step \"\(r.label)\" (id \(r.id), problem \(step.problemId ?? "?"), person \(step.personId)): call problems_get(\"\(step.personId)\") to see it in context. The user may want to discuss it, refine it, answer it, or decide it's done / no longer relevant — change it with problems_update.")
+                } else {
+                    lines.append("- Next step \"\(r.label)\" (id \(r.id), a legacy card): read its hypothesis.md under people/*/hypotheses/\(r.id)/. To change the plan, use problems_update on that person's problem list (the legacy card itself is read-only history).")
+                }
+            case .problem:
+                let owner = problems.first { $0.id == r.id }?.personId ?? "_self"
+                lines.append("- Problem \"\(r.label)\" (id \(r.id), person \(owner)): call problems_get(\"\(owner)\") to read it with its steps and sources. Work on THIS problem; keep its plan coherent and update it with problems_update when the conversation changes it.")
             case .chat:
                 lines.append("- Prior conversation \"\(r.label)\": read chats/\(r.id).md for what was already discussed.")
             }
@@ -940,37 +949,37 @@ final class AppState {
     }
 
     func chatAbout(_ hyp: Hypothesis) {
-        startNewChat()
         // Attach the step as a reference chip and leave the input empty — the user just types.
-        pendingReferences = [Reference(kind: .step, id: hyp.id, label: hyp.title)]
-        pendingChatDraft = ""
+        let rt = runtime(startNewChat())
+        rt.draftReferences = [Reference(kind: .step, id: hyp.id, label: hyp.title)]
+        rt.draft = ""
     }
 
     /// Open a new chat with a document attached as a reference (empty input). Used from the file viewer.
     func chatAboutFile(_ doc: MedDocument) {
-        startNewChat()
-        pendingReferences = [Reference(kind: .file, id: doc.relativePath, label: doc.displayName)]
-        pendingChatDraft = ""
+        let rt = runtime(startNewChat())
+        rt.draftReferences = [Reference(kind: .file, id: doc.relativePath, label: doc.displayName)]
+        rt.draft = ""
     }
 
     func explainInNewChat(_ quote: String, fromChat: String?) {
-        startNewChat()
+        let rt = runtime(startNewChat())
         var draft = "Explain \"\(quote.trimmingCharacters(in: .whitespacesAndNewlines))\""
-        if let fromChat, let title = chats.first(where: { $0.id == fromChat })?.title {
-            pendingReferences = [Reference(kind: .chat, id: fromChat, label: title)]
+        if let fromChat, let title = chatIndex[fromChat]?.title ?? chatRuntimes[fromChat]?.title {
+            rt.draftReferences = [Reference(kind: .chat, id: fromChat, label: title)]
             draft += "\n\ncontext: @\(title) "
         }
-        pendingChatDraft = draft
+        rt.draft = draft
     }
 
     func chatPrompt(_ msg: String, references: [Reference], firstTurn: Bool,
-                    stage: RoundsResearchStage = .default) -> String {
+                    stage: RoundsResearchStage = .default, note: String? = nil) -> String {
         // Slash command (e.g. /help, /model, a custom skill): Rounds is a thin layer over Claude
         // Code, so pass it through RAW — no task framing — and let Claude's own command machinery
         // handle it. Our safety contract still rides along via --append-system-prompt.
         let trimmed = msg.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("/") { return msg }
-        let refBlock = resolveReferences(references)
+        let refBlock = resolveReferences(references) + (note.map { "\n\n(Context from Rounds: \($0))" } ?? "")
         // Per-turn selector for the evidence-maturity axis. The FULL behaviour spec (which tiers each
         // stage admits, how to label early sources) lives in chat.md; here we just name the stage and
         // its one-line directive so it stays current even when the slider moves between warm turns.
@@ -1005,10 +1014,11 @@ final class AppState {
         your own first and ask only the 1–3 highest-yield questions that would actually change the \
         plan — batched, not one every turn. Be concise and decisive; tailor every step to their own \
         data; converge on the likely cause + the ONE reversible experiment that confirms or refutes it.
-        If the user wants a reversible change to a next-step card they \
-        referenced (translate it to their language, mark it done/not-relevant, snooze, reactivate), \
-        just do it: CALL the `report_step_action` tool with `{ "id": "<step id>", "action": "relanguage|done|dismiss|snooze|activate" }` \
-        and confirm in ONE short sentence — no permission menu, never claim you'll edit a file yourself.
+        THE PLAN: when this turn changes a person's picture or plan (new symptom, result discussed, \
+        answer to a question, a step done / no longer relevant, a better plan), read it with \
+        `problems_get` and update it in ONE `problems_update` call that keeps it coherent (no duplicate \
+        or contradicting steps; supersede what a new step replaces) — then say what changed in one \
+        sentence. A referenced problem/step the user wants changed: just do it via problems_update.
 
         User: \(msg)\(refBlock)
         """
@@ -1031,6 +1041,9 @@ final class AppState {
             if !m.references.isEmpty, let data = try? JSONEncoder().encode(m.references) {
                 sentinel += " refs=\(data.base64EncodedString())"
             }
+            if !m.planChanges.isEmpty, let data = try? JSONEncoder().encode(m.planChanges) {
+                sentinel += " plan=\(data.base64EncodedString())"   // the "plan updated" card survives reopen
+            }
             sentinel += " -->"
             md += "\(sentinel)\n\n\(m.text)\n\n"
         }
@@ -1038,10 +1051,15 @@ final class AppState {
         try? FileManager.default.createDirectory(at: vault.chatsDir, withIntermediateDirectories: true)
         try? md.data(using: .utf8)?.write(to: url)
         VaultStore.saveChatSources(chatId, sources, vault)
-        reloadChatsOnly()
+        // Upsert just this chat's summary (no rescan of every chat file on the main thread).
+        let summary = ChatSummary(id: chatId, title: title, hypothesisId: nil, updatedAt: Date(),
+                                  sessionId: (sessionId?.isEmpty ?? true) ? nil : sessionId, researchStage: stage)
+        var list = chats
+        list.removeAll { $0.id == chatId }
+        list.insert(summary, at: 0)
+        chats = list
+        scheduleCatalogRebuild()
     }
-
-    private func reloadChatsOnly() { chats = VaultStore.loadChats(vault); scheduleCatalogRebuild() }
 
     func loadTranscript(_ id: String) -> [ChatMessage] {
         let url = vault.chatsDir.appendingPathComponent("\(id).md")
@@ -1049,13 +1067,16 @@ final class AppState {
         var msgs: [ChatMessage] = []
         var role: ChatRole?
         var pendingRefs: [Reference] = []
+        var pendingPlan: [PlanChange] = []
         var buf = ""
         func flush() {
             if let r = role, !buf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                msgs.append(ChatMessage(id: UUID().uuidString, role: r, text: buf.trimmingCharacters(in: .whitespacesAndNewlines), timestamp: Date(), references: pendingRefs))
+                msgs.append(ChatMessage(id: UUID().uuidString, role: r, text: buf.trimmingCharacters(in: .whitespacesAndNewlines),
+                                        timestamp: Date(), references: pendingRefs, planChanges: pendingPlan))
             }
             buf = ""
             pendingRefs = []
+            pendingPlan = []
         }
         for raw in s.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
@@ -1064,13 +1085,16 @@ final class AppState {
                 // <!-- rounds:msg role=<role> [refs=<base64 json>] -->
                 let inner = line.replacingOccurrences(of: "<!-- rounds:msg role=", with: "")
                     .replacingOccurrences(of: "-->", with: "").trimmingCharacters(in: .whitespaces)
-                let parts = inner.split(separator: " ", maxSplits: 1)
+                // base64 never contains spaces, so every token after the role is one key=value.
+                let parts = inner.split(separator: " ")
                 role = ChatRole(rawValue: String(parts.first ?? ""))
-                if parts.count > 1 {
-                    let token = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                for token in parts.dropFirst().map(String.init) {
                     if token.hasPrefix("refs="), let data = Data(base64Encoded: String(token.dropFirst(5))),
                        let decoded = try? JSONDecoder().decode([Reference].self, from: data) {
                         pendingRefs = decoded
+                    } else if token.hasPrefix("plan="), let data = Data(base64Encoded: String(token.dropFirst(5))),
+                              let decoded = try? JSONDecoder().decode([PlanChange].self, from: data) {
+                        pendingPlan = decoded
                     }
                 }
             } else if line == "## user" || line == "## assistant" || line == "## system" {
@@ -1426,66 +1450,38 @@ final class AppState {
             VaultStore.reconcileStagedFile(stagedPath: f.stagedPath, vault: vault)
             removeProcessing(f.url)
         }
-        rt.finishPhases()   // the filing run is the last leg — snapshot the whole pipeline onto this message
+        rt.finishPhases()
         rt.append(.assistant, parsed.displayText, phases: rt.phases)
-        reload()
+        await reloadAsync()
         batch = nil
         importChatId = nil
-        Task { await generateHypotheses(trigger: "new documents were just filed; refresh and supersede stale steps") }
         await maybeStartNextBatch()
+        // Same session, next turn: bring the plan of everyone whose documents were just filed up to
+        // date (problems → next steps), following the shared rules — no separate generator lane.
+        await updatePlanAfterFiling(chatId: b.chatId, titles: toFile.map(\.title))
     }
 
-    // MARK: - Hypotheses
+    /// The follow-up turn of an import chat: update the problem list of each person whose documents
+    /// were just filed. Runs in that same chat (so the user can open it and see what changed and why).
+    private func updatePlanAfterFiling(chatId: String, titles: [String]) async {
+        let rt = runtime(chatId)
+        let trigger = "new documents were just filed: \(titles.joined(separator: "; "))"
+        let prompt = """
+        The documents are filed. Now bring the problem list of EACH person whose documents you just filed \
+        up to date — for each of them in turn, follow the task below with person_slug = that person's slug.
 
-    /// Keep next steps up to date in the BACKGROUND. Runs in its own lane (its own process
-    /// and status), so it never blocks chatting or leaks into a chat view.
-    func generateHypotheses(trigger: String = "user requested") async {
-        guard !identifyingNextSteps else { return }
-        identifyingNextSteps = true
-        nextStepsStatus = "Reviewing your documents…"
-        nextStepsTrace = []
-        defer { identifyingNextSteps = false; nextStepsStatus = ""; nextStepsTrace = []; nextStepsGeneratingSlug = nil }
-
-        let counts = Dictionary(grouping: documents, by: { $0.personId }).mapValues { $0.count }
-        let targets = counts.keys.sorted { counts[$0]! > counts[$1]! }
-        let targetPeople = targets.isEmpty ? ["_self"] : targets
-        let before = hypotheses.count
-        let beforeSig = Set(hypotheses.map { "\($0.id)|\($0.status)" })   // to notify only if something changed
-
-        for slug in targetPeople {
-            let name = people.first { $0.slug == slug }?.displayName ?? slug
-            nextStepsGeneratingSlug = slug   // so the status-line link opens THIS person's chat, not a fixed one
-            nextStepsStatus = "Identifying next steps for \(name)…"
-            let prompt = BrainResources.hypothesesPrompt
-                .replacingOccurrences(of: "{{PERSON_SLUG}}", with: slug)
-                .replacingOccurrences(of: "{{TRIGGER}}", with: trigger)
-                .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
-            let run = baseRun(prompt: prompt, policy: .readWrite, resume: nil)
-            // Run the generation THROUGH the per-person "Next steps" chat so it's a live, openable
-            // session: the request appears immediately and the trace + text stream into it as it
-            // works (no more empty/stale chat). The model writes the hypothesis files itself (readWrite).
-            let rt = runtime("nextsteps-\(slug)")
-            rt.beginPipeline()   // seed the timeline; the hypotheses prompt adds <phase> markers per step
-            rt.pushPhase("Reviewing \(name)'s records")
-            let parsed = await rt.runGeneration(run,
-                userText: "Review my records and update my next steps.",
-                title: "Next steps · \(name)",
-                initialStatus: "Reviewing your records…")
-            // Principle 6: a red flag from this background lane must still raise the urgent banner.
-            if let a = parsed.alert { urgentBanner = a }
-            reload()   // surface new steps as each person finishes
-        }
-        // Remember the language we generated in, so a later launch can detect a mismatch.
-        VaultStore.writeString("hypothesesLanguage", answerLanguageDescriptor, vault)
-        Analytics.track(.hypothesesGenerated(count: max(0, hypotheses.count - before)))
-        // Notify only when this was an AUTOMATIC pass (not user-requested) AND the steps actually
-        // changed — so a background regeneration that found nothing new stays silent.
-        let afterSig = Set(hypotheses.map { "\($0.id)|\($0.status)" })
-        if !trigger.contains("user requested"), afterSig != beforeSig {
-            NotificationService.shared.notify(title: "Rounds updated your next steps",
-                                              body: "New next steps are ready on your dashboard.")
-        }
+        """ + reviewPrompt("<that person's slug>", trigger: trigger)
+        var run = baseRun(prompt: prompt, policy: .readWrite, resume: rt.sessionId)
+        run.chatId = chatId
+        rt.beginPipeline()
+        let parsed = await rt.runOneShot(run, initialStatus: "Updating the plan…")
+        if let a = parsed.alert { urgentBanner = a }
+        rt.finishPhases()
+        rt.append(.assistant, parsed.displayText, phases: rt.phases, planChanges: rt.takePlanChanges())
+        reloadProblems()
     }
+
+    // MARK: - The plan (problem lists)
 
     /// Ask for notification permission (used by onboarding). Returns whether it's now authorized.
     @discardableResult
@@ -1493,9 +1489,266 @@ final class AppState {
         await NotificationService.shared.requestAuthorization()
     }
 
-    /// Apply reversible changes the chat brain requested for existing next-step cards
-    /// (translate into the user's language, or change status). Runs in the background lane —
-    /// chat is read-only, so the APP performs these writes in a controlled pass.
+    /// Re-read just the problem lists (off the main thread). Called when a session's `problems_update`
+    /// lands and by the background watcher (writes can come from any Claude session's MCP server).
+    func reloadProblems() {
+        let v = vault
+        Task {
+            // Read the people list fresh too — a filing session may have just created a new person.
+            let lists = await Task.detached(priority: .userInitiated) { ProblemStore.loadAll(v, people: VaultStore.loadPeople(v)) }.value
+            if lists != problemLists { problemLists = lists; scheduleCatalogRebuild() }
+        }
+    }
+
+    private var problemWatcher: Task<Void, Never>?
+    /// Every Claude session runs its own rounds-sources server that may write a problem list at any
+    /// time — poll the lists' mtimes (a few stats every 1.5 s, off the main thread) and reload on change.
+    func startProblemWatcher() {
+        problemWatcher?.cancel()
+        let v = vault
+        problemWatcher = Task { [weak self] in
+            var last = await Task.detached { ProblemStore.signature(v) }.value
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(1500))
+                let sig = await Task.detached { ProblemStore.signature(v) }.value
+                if sig != last { last = sig; self?.reloadProblems() }
+            }
+        }
+    }
+
+    /// Run a write against a person's list off the main thread, then refresh. Failures (another
+    /// session holding the lock for >10 s, a corrupt file) surface as a toast — never a silent drop.
+    private func writePlan(_ slug: String, _ work: @escaping @Sendable (VaultPaths) throws -> Void) async -> Bool {
+        let v = vault
+        do {
+            try await Task.detached(priority: .userInitiated) { try work(v) }.value
+            reloadProblems()
+            return true
+        } catch {
+            toast = "Couldn't update the plan right now — try again in a moment."
+            return false
+        }
+    }
+
+    /// Start a chat that works in the BACKGROUND (opens as a sidebar row, doesn't take the user away
+    /// from what they're doing). `taskPrompt` replaces the normal chat framing for the first turn
+    /// (a review or the one-time migration); `hiddenNote` is extra context the model sees but the
+    /// transcript doesn't show.
+    @discardableResult
+    func startBackgroundChat(title: String, message: String, references: [Reference] = [],
+                             taskPrompt: String? = nil, hiddenNote: String? = nil, activate: Bool = false) -> String {
+        let id = newChatId()
+        openChat(id, activate: activate)
+        let rt = runtime(id)
+        rt.generatedTitle = title
+        rt.send(message, references: references, taskPrompt: taskPrompt, hiddenNote: hiddenNote)
+        return id
+    }
+
+    private func displayNameFor(_ slug: String) -> String {
+        if slug == "_self" { return displayName.isEmpty ? "You" : displayName }
+        return people.first { $0.slug == slug }?.displayName ?? slug
+    }
+
+    func reviewPrompt(_ slug: String, trigger: String) -> String {
+        BrainResources.reviewPrompt
+            .replacingOccurrences(of: "{{PERSON_SLUG}}", with: slug)
+            .replacingOccurrences(of: "{{TRIGGER}}", with: trigger)
+            .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
+    }
+
+    /// "Review records" on Home: an ordinary (background) chat that brings this person's problem list
+    /// up to date. Replaces the old per-person next-steps generator.
+    func reviewPerson(_ slug: String) {
+        guard !isPersonBusy(slug) else { if let c = busyPeople[slug] { selectTab(.chat(c)) }; return }
+        let name = displayNameFor(slug)
+        let id = startBackgroundChat(title: "Review · \(name)",
+                                     message: slug == "_self" ? "Review my records and update my plan."
+                                                              : "Review \(name)'s records and update the plan.",
+                                     references: [Reference(kind: .person, id: slug, label: name)],
+                                     taskPrompt: reviewPrompt(slug, trigger: "the user asked for a review of \(name)'s records"))
+        busyPeople[slug] = id
+    }
+
+    /// "Review my records" with no plan yet: one background review chat per person who has documents
+    /// (they run in parallel — the problem-list tools make concurrent writers safe).
+    func reviewEveryone() {
+        let slugs = Set(documents.map(\.personId))
+        for slug in (slugs.isEmpty ? ["_self"] : Array(slugs)).sorted() { reviewPerson(slug) }
+    }
+
+    /// Mark a step done / not relevant / reopened — deterministic (no LLM), so Home can't drift.
+    func setStepStatus(_ step: Hypothesis, _ status: String) {
+        guard step.problemId != nil else { setHypothesisStatusLocally(step.id, status == "open" ? "active" : status); return }
+        let slug = step.personId, id = step.id
+        withAnimation(.easeInOut(duration: 0.3)) { patchStepLocally(id) { $0.status = status } }
+        Task { _ = await writePlan(slug) { try ProblemStore.setStepStatus(slug, stepId: id, status: status, $0) } }
+    }
+
+    func setProblemStatus(_ problem: Problem, _ status: String) {
+        let slug = problem.personId, id = problem.id
+        withAnimation(.easeInOut(duration: 0.3)) {
+            for li in problemLists.indices {
+                if let pi = problemLists[li].problems.firstIndex(where: { $0.id == id }) { problemLists[li].problems[pi].status = status }
+            }
+        }
+        Task { _ = await writePlan(slug) { try ProblemStore.setProblemStatus(slug, problemId: id, status: status, $0) } }
+    }
+
+    private func patchStepLocally(_ stepId: String, _ edit: (inout Hypothesis) -> Void) {
+        for li in problemLists.indices {
+            for pi in problemLists[li].problems.indices {
+                if let si = problemLists[li].problems[pi].steps.firstIndex(where: { $0.id == stepId }) {
+                    edit(&problemLists[li].problems[pi].steps[si]); return
+                }
+            }
+        }
+    }
+
+    /// The user answered a history question on Home. Recorded deterministically right away (the step
+    /// closes, the fact goes into the person's CLAUDE.md), then an ordinary background chat takes the
+    /// answer and improves that problem's plan — the same path as answering inside a chat.
+    func answerStep(_ step: Hypothesis, answer: String) async {
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        checkRedFlags(trimmed)   // a red-flag answer escalates immediately (deterministic net)
+        answeringStep = step.id
+        defer { answeringStep = nil }
+        let slug = step.personId, sid = step.id, q = step.title
+        if step.problemId != nil {
+            withAnimation { patchStepLocally(sid) { $0.answer = trimmed; $0.status = "done"; $0.answeredAt = ProblemStore.today() } }
+            guard await writePlan(slug, { try ProblemStore.answerStep(slug, stepId: sid, question: q, answer: trimmed, $0) }) else { return }
+        } else {
+            // A legacy card: keep the fact, close the card.
+            let v = vault
+            await Task.detached { ProblemStore.appendConfirmedHistory(slug, question: q, answer: trimmed, stepId: sid, v) }.value
+            setHypothesisStatusLocally(sid, "done")
+        }
+        var refs: [Reference] = []
+        if let pid = step.problemId, let p = problems.first(where: { $0.id == pid }) {
+            refs.append(Reference(kind: .problem, id: p.id, label: p.title))
+        } else {
+            refs.append(Reference(kind: .step, id: sid, label: q))
+        }
+        let id = startBackgroundChat(
+            title: "Answer · \(String(q.prefix(40)))",
+            message: "My answer to “\(q)”:\n\(trimmed)",
+            references: refs,
+            hiddenNote: "Rounds already recorded this answer on step \(sid) (status done) and in people/\(slug)/CLAUDE.md. Don't call answer_step again — read the plan with problems_get(\"\(slug)\") and improve it from this answer (replace the question with the concrete next move, supersede what it makes stale). Reply briefly.")
+        busyPeople[slug] = id
+    }
+
+    func chatAboutProblem(_ problem: Problem) {
+        let rt = runtime(startNewChat())
+        rt.draftReferences = [Reference(kind: .problem, id: problem.id, label: problem.title)]
+        rt.draft = ""
+    }
+
+    /// The one-time move of legacy flat next-step cards into problem lists. People with nothing open
+    /// are marked done deterministically; the rest are reorganized IN PARALLEL — one Claude run per
+    /// person (the problem-list lock makes concurrent writers safe), all reporting into ONE chat so the
+    /// user can see what was merged or retired and why. Sequentially this took ~10 min per person.
+    func migrateLegacyIfNeeded(force: Bool = false) {
+        guard checklistComplete, !toolPaths.claudeNeedsLogin, migrationChatId == nil else { return }
+        var needs: [Person] = []
+        for p in people where problemList(p.slug)?.migratedLegacy != true {
+            if hypotheses.contains(where: { $0.personId == p.slug && $0.isOpenStep }) {
+                needs.append(p)
+            } else if hypotheses.contains(where: { $0.personId == p.slug }) || problemList(p.slug) != nil {
+                let slug = p.slug
+                Task { _ = await writePlan(slug) { try ProblemStore.markMigrated(slug, $0) } }
+            }
+        }
+        guard !needs.isEmpty else { return }
+        // Don't start a second run if the app was relaunched while one was in flight minutes ago.
+        let key = "rounds.migrationStartedAt"
+        if !force, let t = UserDefaults.standard.object(forKey: key) as? Date, Date().timeIntervalSince(t) < 20 * 60 { return }
+        UserDefaults.standard.set(Date(), forKey: key)
+
+        let id = newChatId()
+        openChat(id, activate: false)
+        let rt = runtime(id)
+        rt.generatedTitle = "Organizing next steps into problems"
+        rt.append(.user, "Organize my next steps into problems.")
+        migrationChatId = id
+        migratingPeople = Set(needs.map(\.slug))
+        rt.isStreaming = true
+        rt.statusLine = "Organizing \(needs.count) \(needs.count == 1 ? "person's" : "people's") next steps…"
+        let work = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for p in needs { group.addTask { await self.migrateOne(p, chatId: id) } }
+            }
+            rt.isStreaming = false
+            rt.statusLine = ""
+            markChatFinished(id)
+            chatTurnsFinished(id)
+            rt.drainQueueIfIdle()
+        }
+        rt.adopt(work)   // Stop in that chat cancels the runs (each claude process ends with its stream)
+    }
+
+    /// People whose legacy cards are being reorganized right now (Home shows them as busy).
+    var migratingPeople: Set<String> = []
+
+    private func migrateOne(_ person: Person, chatId: String) async {
+        let name = person.slug == "_self" ? (displayName.isEmpty ? "the account holder" : displayName) : person.displayName
+        let prompt = BrainResources.migratePrompt
+            .replacingOccurrences(of: "{{PEOPLE}}", with: "\(person.slug) (\(name))")
+            .replacingOccurrences(of: "{{ANSWER_LANGUAGE}}", with: answerLanguageDescriptor)
+        var run = baseRun(prompt: prompt, policy: .readOnly, resume: nil)
+        run.chatId = chatId
+        run.includePartial = false
+        // Reorganizing existing cards is bookkeeping, not deep clinical reasoning — keep it brisk.
+        if selectedModel.supportedEfforts.contains("medium") { run.effort = .medium }
+        var text = ""
+        for await e in ClaudeEngine.stream(run) {
+            switch e {
+            case .textDelta(let t): text += t
+            case .finished(let t, _, let isError, _):
+                if !t.isEmpty { text = t }
+                if isError, let notice = Self.billingMessage(t) { engineNotice = notice }
+            case .toolResult: reloadProblems()
+            default: break
+            }
+        }
+        let label = person.slug == "_self" ? "You" : person.displayName
+        if Task.isCancelled {   // the user pressed Stop — leave the rest for next time
+            migratingPeople.remove(person.slug)
+            runtime(chatId).append(.system, "\(label): stopped — Rounds will finish this next time it starts.")
+            reloadProblems()
+            return
+        }
+        let parsed = ProtocolParser.parse(text)
+        let body = parsed.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        runtime(chatId).append(.assistant, "**\(label)** — " + (body.isEmpty ? "done." : body))
+        migratingPeople.remove(person.slug)
+        let ok = await Task.detached { [vault] in ProblemStore.load(person.slug, vault)?.migratedLegacy == true }.value
+        if !ok { runtime(chatId).append(.system, "\(label): not finished — it will be retried next time Rounds starts.") }
+        reloadProblems()
+    }
+
+    /// A chat (or a resumed old session) emitted legacy next-step output — a `rounds.hypotheses` block
+    /// or `rounds.step_action` — instead of using `problems_update`. Keep it rather than lose it.
+    func absorbLegacyPlanOutput(_ hyps: [Hypothesis], _ actions: [StepAction]) {
+        let bySlug = Dictionary(grouping: hyps, by: { $0.personId.isEmpty ? "_self" : $0.personId })
+        for (slug, steps) in bySlug {
+            Task { _ = await writePlan(slug) { try ProblemStore.addLooseSteps(slug, steps, $0) } }
+        }
+        for a in actions {
+            guard let st = statusForAction(a.action) ?? (a.action.lowercased() == "answer" ? "done" : nil) else { continue }
+            if let step = problems.flatMap(\.steps).first(where: { $0.id == a.id }) {
+                if a.action.lowercased() == "answer", let ans = a.answer {
+                    let slug = step.personId, q = step.title, sid = step.id
+                    Task { _ = await writePlan(slug) { try ProblemStore.answerStep(slug, stepId: sid, question: q, answer: ans, $0) } }
+                } else {
+                    setStepStatus(step, st == "active" ? "open" : st)
+                }
+            } else {
+                setHypothesisStatusLocally(a.id, st)
+            }
+        }
+    }
+
     /// Canonical status for a step-action verb (nil = not a status change).
     private func statusForAction(_ action: String) -> String? {
         switch action.lowercased() {
@@ -1507,96 +1760,17 @@ final class AppState {
         }
     }
 
-    /// Set a step's status DETERMINISTICALLY (in-memory + on disk, no LLM). This is what keeps Home
-    /// in sync with a resolve done from chat — the old path asked Claude to edit the files, which was
-    /// flaky, so a card resolved in chat could linger on Home. Animated so the card fades out.
+    /// Set a LEGACY card's status deterministically (in-memory + on disk, no LLM).
     func setHypothesisStatusLocally(_ id: String, _ status: String) {
         withAnimation(.easeInOut(duration: 0.32)) {
             if let i = hypotheses.firstIndex(where: { $0.id == id }) { hypotheses[i].status = status }
         }
-        VaultStore.setHypothesisStatus(id, status, vault)
+        let v = vault
+        Task.detached { VaultStore.setHypothesisStatus(id, status, v) }
     }
 
-    /// Resolve a next-step card (Home "Mark as resolved" button).
+    /// Resolve a legacy card (Home "Mark as resolved" button).
     func resolveHypothesis(_ hyp: Hypothesis) { setHypothesisStatusLocally(hyp.id, "done") }
-
-    func applyStepActions(_ actions: [StepAction]) async {
-        // "answer" actions (a history answer to an ask-user step) go through the question loop.
-        for a in actions where a.action.lowercased() == "answer" && !a.id.isEmpty {
-            if let h = hypotheses.first(where: { $0.id == a.id }), let ans = a.answer, !ans.trimmingCharacters(in: .whitespaces).isEmpty {
-                await answerQuestionStep(h, answer: ans)
-            }
-        }
-        // Status changes (done/dismiss/snooze/activate) are applied DETERMINISTICALLY here — no LLM —
-        // so a resolve from chat instantly updates Home and can't drift from the files.
-        for a in actions where !a.id.isEmpty {
-            if let st = statusForAction(a.action) { setHypothesisStatusLocally(a.id, st) }
-        }
-        // Only a relanguage/translate rewrite still needs the brain (it edits the card's content).
-        let lang = answerLanguageDescriptor
-        var instr: [String] = []
-        for a in actions where !a.id.isEmpty {
-            switch a.action.lowercased() {
-            case "relanguage", "translate", "language":
-                instr.append("• Step \(a.id): rewrite its hypothesis.md body, `title`, and `whyNow` into \(lang). Preserve every number, unit, date, marker name, drug name, status, source, and [S#] citation exactly, and keep the same id. This is a translation/rewrite, NOT a re-analysis — do not change the meaning, the sources, or the conclusion.")
-            default: continue
-            }
-        }
-        guard !instr.isEmpty else { return }
-        let prompt = """
-        Apply these changes to existing next-step files (find each by its id — its hypothesis.json lives under
-        EITHER people/<slug>/hypotheses/<id>/ OR the top-level hypotheses/<id>/; use Glob/Grep to locate it).
-        For a status change, update `status` in BOTH hypothesis.json and the hypothesis.md front-matter; never delete a step.
-        For a rewrite/translation, edit hypothesis.md and hypothesis.json in place. Do NOT draw new clinical
-        conclusions, do NOT search for new sources, and do NOT edit index.json. Reply with only the word "done".
-
-        \(instr.joined(separator: "\n"))
-        """
-        let run = baseRun(prompt: prompt, policy: .readWrite, resume: nil)
-        for await _ in ClaudeEngine.stream(run) { }
-        reload()
-    }
-
-    /// The question-step loop: record the user's history answer as a confirmed fact, mark the
-    /// question done, then regenerate next steps so the answer shapes a BETTER step.
-    func answerQuestionStep(_ hyp: Hypothesis, answer: String) async {
-        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        checkRedFlags(trimmed)   // a red-flag answer escalates immediately, before regeneration
-        answeringStep = hyp.id
-        defer { answeringStep = nil }
-        let slug = hyp.personId
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"; df.locale = Locale(identifier: "en_US_POSIX")
-        let today = df.string(from: Date())
-
-        // Pass A — record the answer durably + mark the question done. (Red-flag answers also
-        // emit rounds.alert, which we parse and raise on the urgent banner.)
-        let recordPrompt = """
-        The user answered a patient-history question in next-step \(hyp.id) for people/\(slug)/.
-        Question (verbatim): "\(hyp.title)"
-        Their answer (verbatim — treat as CONFIRMED PRIMARY history): "\(trimmed)"
-
-        1. Append a dated, durable fact to people/\(slug)/CLAUDE.md under a "## Confirmed history (from questions)"
-           heading — store the question, the answer verbatim, the date \(today), and this step id so it's never re-asked.
-        2. Locate step \(hyp.id) (its hypothesis.json lives under EITHER people/\(slug)/hypotheses/\(hyp.id)/ OR the
-           top-level hypotheses/\(hyp.id)/ — use Glob/Grep to find it): set status "done" and add `answer` (verbatim)
-           and `answeredAt` ("\(today)") to BOTH hypothesis.json and the hypothesis.md front-matter. Keep the file.
-        Do NOT draw a clinical conclusion and do NOT edit index.json. ONLY if the answer reports a red-flag
-        symptom (coughing up blood, black/tarry stools, chest pain, fainting, a value at a critical threshold)
-        ALSO emit a rounds.alert JSON block saying so plainly. Otherwise reply with only "done".
-        """
-        let runA = baseRun(prompt: recordPrompt, policy: .readWrite, resume: nil)
-        var full = ""
-        for await e in ClaudeEngine.stream(runA) {
-            if case .textDelta(let t) = e { full += t }
-            if case .finished(let t, _, _, _) = e, !t.isEmpty { full = t }
-        }
-        if let a = ProtocolParser.parse(full).alert { urgentBanner = a }
-        reload()
-
-        // Pass B — regenerate so the recorded answer produces a sharper next step (never re-asks it).
-        await generateHypotheses(trigger: "the user just answered a history question — use it as confirmed primary history to form a sharper next step, and never re-ask it")
-    }
 
     // MARK: - Files & center tabs
 
@@ -1651,8 +1825,10 @@ final class AppState {
         VaultStore.writeString("customInstructions", customInstructions, vault)
         VaultStore.writeString("permissionMode", permissionMode.rawValue, vault)
         chatRuntimes.values.forEach { $0.modelChanged() }   // new system prompt / mode → fresh process
-        if languageChanged, !documents.isEmpty {
-            Task { await generateHypotheses(trigger: "the answer language changed to \(language) — rewrite every next step in \(language)") }
+        if languageChanged, !language.hasPrefix("Auto"), problems.contains(where: \.isOpen) {
+            startBackgroundChat(title: "Plan → \(language)",
+                                message: "Rewrite my plan in \(language).",
+                                hiddenNote: "Rewrite every problem title/summary and step title/whyNow/detail/question on every person's problem list into \(language) via problems_update (read each with problems_get). Translation only — keep ids, statuses, numbers, units, drug names, dates, sources and [S#] exactly; no new analysis. Reply in one sentence.")
         }
     }
 
@@ -1689,9 +1865,10 @@ final class AppState {
         try? fm.removeItem(at: claudeProjectDir)
 
         // 3. Reset in-memory state to defaults.
-        people = []; documents = []; hypotheses = []; chats = []; displayName = ""
+        people = []; documents = []; hypotheses = []; chats = []; displayName = ""; problemLists = []
+        busyPeople = [:]; migrationChatId = nil; migratingPeople = []
+        problemWatcher?.cancel(); problemWatcher = nil
         openTabs = [.home]; activeTab = .home; openFileDocs = [:]
-        pendingChatDraft = ""; pendingReferences = []
         toast = nil; showSettings = false
         language = "Auto (match the user)"; customInstructions = ""; permissionMode = .bypass
         selectedModel = .opus; selectedEffort = .default

@@ -13,7 +13,8 @@ FILES = [
     ("systemCompact",   "prompts/system_compact.txt",       "Rounds safety contract (missing).\n"),
     ("intakePrompt",    "prompts/intake.md",                "## intake (missing)\n"),
     ("intakeBatch",     "prompts/intake_batch.md",          "## batch intake (missing)\n"),
-    ("hypothesesPrompt","prompts/hypotheses.md",            "## hypotheses (missing)\n"),
+    ("reviewPrompt",    "prompts/review.md",                "## review (missing)\n"),
+    ("migratePrompt",   "prompts/migrate.md",               "## migrate (missing)\n"),
     ("chatPrompt",      "prompts/chat.md",                  "## chat (missing)\n"),
     ("settingsJson",    "settings.json",                    '{"permissions":{"deny":["Bash"]}}\n'),
     ("mcpTemplate",     "mcp.json.template",                '{"mcpServers":{}}\n'),
@@ -45,7 +46,7 @@ def emit():
         "import Foundation",
         "",
         "nonisolated enum BrainResources {",
-        '    static let brainVersion = "1.3.0"',
+        '    static let brainVersion = "1.4.0"',
         "",
     ]
     for name, rel, placeholder in FILES:

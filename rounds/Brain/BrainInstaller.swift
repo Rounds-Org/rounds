@@ -45,7 +45,10 @@ nonisolated enum BrainInstaller {
         try write(BrainResources.systemCompact, to: vault.systemCompact)
         try write(BrainResources.intakePrompt, to: vault.promptsDir.appendingPathComponent("intake.md"))
         try write(BrainResources.intakeBatch, to: vault.promptsDir.appendingPathComponent("intake_batch.md"))
-        try write(BrainResources.hypothesesPrompt, to: vault.promptsDir.appendingPathComponent("hypotheses.md"))
+        try write(BrainResources.reviewPrompt, to: vault.promptsDir.appendingPathComponent("review.md"))
+        try write(BrainResources.migratePrompt, to: vault.promptsDir.appendingPathComponent("migrate.md"))
+        // Next steps are a per-person problem list now; the old flat-cards generator prompt is retired.
+        try? FileManager.default.removeItem(at: vault.promptsDir.appendingPathComponent("hypotheses.md"))
         try write(BrainResources.chatPrompt, to: vault.promptsDir.appendingPathComponent("chat.md"))
         try write(BrainResources.settingsJson, to: vault.brainSettings)
         try write(BrainResources.criticalValues, to: vault.criticalValues)
@@ -58,6 +61,7 @@ nonisolated enum BrainInstaller {
         let mcp = BrainResources.mcpTemplate
             .replacingOccurrences(of: "{{NODE_PATH}}", with: node)
             .replacingOccurrences(of: "{{MCP_INDEX_PATH}}", with: vault.mcpIndex.path)
+            .replacingOccurrences(of: "{{VAULT_PATH}}", with: vault.root.path)
         try write(mcp, to: vault.mcpConfig)
 
         // Stamp the installed version.

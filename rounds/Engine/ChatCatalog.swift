@@ -139,7 +139,7 @@ nonisolated enum ChatCatalog {
             switch r.kind {
             case .person where slugs.contains(r.id): score[r.id, default: 0] += 10
             case .file: if let o = docOwner[r.id] { score[o, default: 0] += 10 }
-            case .step: if let o = stepOwner[r.id] { score[o, default: 0] += 10 }
+            case .step, .problem: if let o = stepOwner[r.id] { score[o, default: 0] += 10 }
             default: break
             }
         }

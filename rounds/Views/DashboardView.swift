@@ -14,34 +14,22 @@ struct DashboardView: View {
     // The Home composer draft lives on AppState (so the drag handler + mic can reach it).
     private var askBinding: Binding<String> { Binding(get: { app.homeDraft }, set: { app.homeDraft = $0 }) }
     private var askRefsBinding: Binding<[Reference]> { Binding(get: { app.homeDraftRefs }, set: { app.homeDraftRefs = $0 }) }
-    @State private var stepPersonFilter: String?   // nil = everyone
-    @State private var collapsedPeople: Set<String> = []   // person groups collapsed in Next steps
+    @AppStorage("rounds.plan.personFilter") private var planFilter = ""   // "" = everyone
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if let alert = app.urgentBanner { UrgentBanner(alert: alert) }
+            // Lazy: each problem card is its own row, so only what's on screen is built and laid out.
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if let alert = app.urgentBanner { UrgentBanner(alert: alert).padding(.bottom, 22) }
+                header.padding(.bottom, 22)
+                askBox.padding(.bottom, 22)
+                if !app.checklistComplete { checklistCard.padding(.bottom, 22) }
+                if app.checklistComplete, !starterDone { gettingStartedCard.padding(.bottom, 22) }
 
-                header
+                PlanSection(filter: $planFilter)
 
-                askBox
-
-                if !app.checklistComplete {
-                    checklistCard
-                }
-
-                if app.checklistComplete, !starterDone { gettingStartedCard }
-
-                nextSteps
-
-                DocumentsSection()
-
-                if !archivedHypotheses.isEmpty {
-                    archivedSteps
-                }
-
+                DocumentsSection().padding(.top, 18).padding(.bottom, 22)
                 featureBanner
-
                 Spacer(minLength: 24)
             }
             .padding(28)
@@ -77,7 +65,7 @@ struct DashboardView: View {
                 }
             }
             MentionField(text: askBinding, references: askRefsBinding,
-                         placeholder: "Ask about a result, or @-reference a document…",
+                         placeholder: "Ask about a result, or @-reference a document or problem…",
                          onSend: submit,
                          onRegisterTextView: { app.homeInputTextView = $0 })
             HStack(spacing: 10) {
@@ -149,22 +137,23 @@ struct DashboardView: View {
     // Feature-discovery checklist so a new user sees what Rounds can do. Each row lights up once done.
     private struct StarterStep: Identifiable { let id = UUID(); let icon: String; let title: String; let detail: String; let done: Bool }
     private var starterSteps: [StarterStep] {
-        [
+        let steps = app.problems.flatMap(\.steps) + app.hypotheses
+        return [
             .init(icon: "tray.and.arrow.down.fill", title: "Add a health record",
                   detail: "Drag in a lab result, report, or a photo of a test — Rounds reads it on your Mac.",
                   done: !app.documents.isEmpty),
-            .init(icon: "checklist", title: "Get your next steps",
-                  detail: "Rounds turns your records into specific, sourced things to do next.",
-                  done: app.hypotheses.contains { !["superseded", "dismissed"].contains($0.status) }),
+            .init(icon: "checklist", title: "Get your plan",
+                  detail: "Rounds finds the problems in your records and the specific, sourced next steps for each.",
+                  done: !app.problems.isEmpty || app.hypotheses.contains { !["superseded", "dismissed"].contains($0.status) }),
             .init(icon: "bubble.left.and.text.bubble.right", title: "Answer a question from Rounds",
                   detail: "It asks the questions a good clinician would, to narrow things down.",
-                  done: app.hypotheses.contains { $0.isQuestion && !($0.answer?.isEmpty ?? true) }),
+                  done: steps.contains { $0.isQuestion && $0.isAnswered }),
             .init(icon: "person.2.fill", title: "Add a family member",
                   detail: "Keep records for parents, partner, kids — Rounds spots risks across the family (with their OK 🙂).",
                   done: app.people.contains { $0.slug != "_self" }),
             .init(icon: "doc.text.magnifyingglass", title: "Open a source",
                   detail: "Every claim links to real medical evidence you can read yourself.",
-                  done: app.hypotheses.contains { $0.sourceCount > 0 }),
+                  done: steps.contains { $0.sourceCount > 0 }),
         ]
     }
     private var starterDone: Bool { starterSteps.allSatisfy { $0.done } }
@@ -198,188 +187,6 @@ struct DashboardView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.accent.opacity(0.18)))
     }
 
-    private var nextSteps: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                SectionHeader(title: "Next steps")
-                if questionCount > 0 {
-                    Text("\(questionCount) to answer")
-                        .zfont(.caption2, .medium)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Theme.accentSoft, in: Capsule()).foregroundStyle(Theme.accent)
-                }
-                Spacer()
-                if app.people.count > 1 {
-                    Menu {
-                        Button { stepPersonFilter = nil } label: { Label("Everyone", systemImage: stepPersonFilter == nil ? "checkmark" : "") }
-                        Divider()
-                        ForEach(app.people) { p in
-                            Button { stepPersonFilter = p.slug } label: {
-                                Label(p.displayName, systemImage: stepPersonFilter == p.slug ? "checkmark" : "")
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "person.crop.circle").zfont(.caption2)
-                            Text(stepPersonFilter.flatMap { pf in app.people.first { $0.slug == pf }?.displayName } ?? "Everyone")
-                                .zfont(.caption)
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                    .menuStyle(.borderlessButton).fixedSize()
-                }
-                if app.identifyingNextSteps {
-                    IdentifyingIndicator()
-                } else if !app.documents.isEmpty {
-                    Button { app.beginHypotheses() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless).zfont(.caption).foregroundStyle(.secondary)
-                        .help("Refresh next steps")
-                        .disabled(app.isStreaming)
-                }
-            }
-
-            if activeHypotheses.isEmpty {
-                if app.identifyingNextSteps {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Working through your records…").zfont(.callout).foregroundStyle(.secondary) }
-                        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
-                } else {
-                    emptyHypotheses
-                }
-            } else {
-                ForEach(groupedHypotheses, id: \.slug) { group in
-                    VStack(alignment: .leading, spacing: 10) {
-                        if showGroupHeaders {
-                            Button { withAnimation { toggleCollapse(group.slug) } } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: collapsedPeople.contains(group.slug) ? "chevron.right" : "chevron.down")
-                                        .zfont(.caption2).foregroundStyle(.secondary)
-                                    Text(groupName(group.slug) ?? "You").zfont(.caption, .semibold).foregroundStyle(.secondary)
-                                    Text("\(group.hyps.count)").zfont(.caption2).foregroundStyle(.tertiary)
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain).linkCursor()
-                        }
-                        if !collapsedPeople.contains(group.slug) {
-                            ForEach(group.hyps) { HypothesisCard(hyp: $0).transition(.opacity) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: next-steps grouping (by person; the person with the newest card shows first)
-
-    /// Extract the yyyy-mm-dd embedded in a hypothesis id (ids look like `hyp_2026-06-21_slug`).
-    private func hypDate(_ h: Hypothesis) -> String {
-        if let r = h.id.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) { return String(h.id[r]) }
-        return ""
-    }
-    /// Display name for a person group header (nil → render as "You").
-    private func groupName(_ slug: String) -> String? {
-        if slug == "_self" { return "You" }
-        let p = app.people.first { $0.slug == slug }
-        let name = p?.displayName ?? slug
-        if let rel = p?.relationship, rel != "self" { return "\(name) · \(rel)" }
-        return name
-    }
-    private var groupedHypotheses: [(slug: String, hyps: [Hypothesis])] {
-        Dictionary(grouping: activeHypotheses, by: { $0.personId })
-            .map { (slug: $0.key, hyps: $0.value) }
-            .sorted { a, b in
-                let da = a.hyps.map(hypDate).max() ?? "", db = b.hyps.map(hypDate).max() ?? ""
-                if da != db { return da > db }                 // newest-card person first
-                if (a.slug == "_self") != (b.slug == "_self") { return a.slug == "_self" }  // then You
-                return a.slug < b.slug
-            }
-    }
-    private var showGroupHeaders: Bool { groupedHypotheses.count > 1 }
-    private func toggleCollapse(_ slug: String) {
-        if collapsedPeople.contains(slug) { collapsedPeople.remove(slug) } else { collapsedPeople.insert(slug) }
-    }
-
-    private var archivedSet: Set<String> { ["superseded", "done", "dismissed"] }
-    private var activeHypotheses: [Hypothesis] {
-        app.hypotheses.filter { !archivedSet.contains($0.status) }
-            .filter { stepPersonFilter == nil || $0.personId == stepPersonFilter }
-    }
-    private var questionCount: Int { activeHypotheses.filter { $0.isQuestion && ($0.answer?.isEmpty ?? true) }.count }
-    private var archivedHypotheses: [Hypothesis] { app.hypotheses.filter { archivedSet.contains($0.status) } }
-
-    @State private var showArchived = false
-    private var archivedSteps: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button { withAnimation { showArchived.toggle() } } label: {
-                HStack {
-                    SectionHeader(title: "Archived steps")
-                    Text("\(archivedHypotheses.count)").zfont(.caption2).foregroundStyle(.tertiary)
-                    Spacer()
-                    Image(systemName: showArchived ? "chevron.up" : "chevron.down")
-                        .zfont(.caption2).foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())   // whole header row is the hit target
-            }
-            .buttonStyle(.plain)
-            .linkCursor()
-            if showArchived {
-                VStack(spacing: 8) {
-                    ForEach(archivedHypotheses) { HypothesisCard(hyp: $0) }
-                }
-                .padding(.top, 6)
-            }
-        }
-    }
-
-    private let suggestedDocs = [
-        ("drop.fill", "A recent blood test or lab panel"),
-        ("waveform.path.ecg", "An imaging report — ultrasound, CT, MRI, X-ray"),
-        ("doc.text", "A specialist's note or discharge summary"),
-        ("camera.fill", "A photo of skin, a nail, or swelling"),
-    ]
-    private var emptyHypotheses: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: app.documents.isEmpty ? "tray.and.arrow.down.fill" : "checkmark.seal.fill")
-                    .foregroundStyle(app.documents.isEmpty ? Theme.accent : .green)
-                Text(app.documents.isEmpty ? "Let's get started" : "You're all caught up")
-                    .zfont(.callout, .semibold)
-            }
-            Text(app.documents.isEmpty
-                 ? "Add a health record and Rounds will read it on your Mac, file it, and propose the right next steps — nothing leaves your computer."
-                 : "No open next steps right now — that's a good place to be. Add more records and Rounds will find what's worth doing next.")
-                .zfont(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Helpful things to add").zfont(.caption2, .semibold).foregroundStyle(.tertiary)
-                ForEach(suggestedDocs, id: \.1) { icon, label in
-                    HStack(spacing: 7) {
-                        Image(systemName: icon).zfont(.caption2).foregroundStyle(Theme.accent).frame(width: 16)
-                        Text(label).zfont(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
-
-            Text(app.documents.isEmpty
-                 ? "Drag any of these onto the window — or ask a question in the box above."
-                 : "Drag a new record onto the window, or ask a question above.")
-                .zfont(.caption2).foregroundStyle(.tertiary)
-            if !app.documents.isEmpty {
-                Button { app.beginHypotheses() } label: { Label("Find next steps now", systemImage: "sparkles") }
-                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
-    }
-
     private var featureBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "wand.and.stars").zfont(.caption).foregroundStyle(.secondary)
@@ -395,10 +202,9 @@ struct DashboardView: View {
         .background(Theme.panel.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.hairline))
     }
-
 }
 
-/// A red flag surfaced from the background next-steps lane (Principle 6). Prominent, dismissible.
+/// A red flag surfaced from a background chat or a Home answer (Principle 6). Prominent, dismissible.
 struct UrgentBanner: View {
     @Environment(AppState.self) private var app
     let alert: RoundsAlert
@@ -419,28 +225,6 @@ struct UrgentBanner: View {
         }
         .padding(14)
         .background(Theme.warn, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-/// While next steps generate, this links to the live Claude Code session (a real chat the user can
-/// open, watch, and continue). Underlines + shows a pointer on hover; click opens the session chat.
-struct IdentifyingIndicator: View {
-    @Environment(AppState.self) private var app
-    @State private var hovering = false
-
-    var body: some View {
-        Button { app.openNextStepsChat() } label: {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
-                Text(app.nextStepsStatus.isEmpty ? "Identifying next steps…" : app.nextStepsStatus)
-                    .zfont(.caption, .medium).foregroundStyle(Theme.accent).lineLimit(1)
-                    .underline(hovering)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .linkCursor()
-        .onHover { hovering = $0 }
     }
 }
 
@@ -499,7 +283,7 @@ struct HypothesisCard: View {
                     Spacer()
                     Button {
                         let a = draft; draft = ""
-                        Task { await app.answerQuestionStep(hyp, answer: a) }
+                        Task { await app.answerStep(hyp, answer: a) }
                     } label: { Label("Submit", systemImage: "paperplane.fill") }
                         .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)

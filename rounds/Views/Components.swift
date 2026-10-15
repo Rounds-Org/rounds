@@ -381,22 +381,29 @@ extension View {
     }
 }
 
-/// The paper dot grid behind Home and empty states.
+/// The paper dot grid behind Home and empty states. Drawn as ONE tiled pattern image instead of
+/// thousands of individual Canvas fills (that redrew on every Home invalidation).
 struct DotGrid: View {
     var spacing: CGFloat = 14
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
-        Canvas { ctx, size in
-            let dot = Path(ellipseIn: CGRect(x: 0, y: 0, width: 1.6, height: 1.6))
-            var y: CGFloat = spacing / 2
-            while y < size.height {
-                var x: CGFloat = spacing / 2
-                while x < size.width {
-                    ctx.fill(dot.offsetBy(dx: x, dy: y), with: .color(.primary.opacity(0.07)))
-                    x += spacing
-                }
-                y += spacing
-            }
+        Image(nsImage: Self.tile(spacing: spacing, dark: scheme == .dark))
+            .resizable(resizingMode: .tile)
+            .allowsHitTesting(false)
+    }
+
+    @MainActor private static var tiles: [String: NSImage] = [:]
+    @MainActor private static func tile(spacing: CGFloat, dark: Bool) -> NSImage {
+        let key = "\(spacing)-\(dark)"
+        if let t = tiles[key] { return t }
+        let img = NSImage(size: NSSize(width: spacing, height: spacing), flipped: false) { _ in
+            (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.07).setFill()
+            let d: CGFloat = 1.6
+            NSBezierPath(ovalIn: NSRect(x: spacing / 2, y: spacing / 2, width: d, height: d)).fill()
+            return true
         }
-        .allowsHitTesting(false)
+        tiles[key] = img
+        return img
     }
 }

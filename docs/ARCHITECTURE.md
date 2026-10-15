@@ -4,6 +4,15 @@
 
 ---
 
+> **Update (v1.11, Oct 2026) — next steps are a per-person problem list.** The flat `hypotheses/` cards
+> and the per-person next-steps generator described below are retired. Each person now has
+> `people/<slug>/problems.json`: problems (what's going on) → the next steps that address each. Every
+> Claude session reads/changes it through the `rounds-sources` tools `problems_get` / `problems_update`
+> (patch ops under a per-person lock, so parallel sessions are safe), following the rules in the vault
+> `CLAUDE.md`; the app makes deterministic changes (done / answer / resolve) through `ProblemStore`.
+> Document filing, chats, "Review" and answering a question on Home all update the same list. Legacy
+> cards are migrated once into problem lists. See the project `CLAUDE.md` for the current rules.
+
 ## 1. TL;DR Recommendation
 
 **Build Architecture A+ — a thin native Swift shell over a versioned, shippable "brain" of files — grafting D's brain-as-release update model and B's warm-process answer onto A's direct-CLI core.** Concretely:

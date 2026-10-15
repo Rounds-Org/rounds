@@ -16,6 +16,10 @@ struct QueuedTurn: Identifiable, Equatable {
     let id = UUID().uuidString
     let text: String
     var references: [Reference] = []
+    /// Replaces the chat framing for this turn (a records review, the one-time migration).
+    var taskPrompt: String? = nil
+    /// Context the model sees but the transcript doesn't show (e.g. "the app already recorded this").
+    var hiddenNote: String? = nil
 }
 
 @MainActor
@@ -56,6 +60,8 @@ final class ChatRuntime: Identifiable {
     @ObservationIgnored weak var inputTextView: ChatKeyTextView?   // live editor, for inserting voice dictation at the caret
     private var phoneLive = ""        // accumulates streamed assistant text for a phone-driven turn
     private var phoneReported = ParsedTurn()   // report_* tool channels captured during a phone turn
+    private var phonePlanChanges: [PlanChange] = []
+    private var turnPlanChanges: [PlanChange] = []   // problems_update results seen during the current local turn
 
     private var warm: WarmSession?
     private var warmModel: RoundsModel?
@@ -68,7 +74,7 @@ final class ChatRuntime: Identifiable {
         self.app = app
         self.messages = app.loadTranscript(id)
         self.sources = VaultStore.loadChatSources(id, app.vault)
-        let summary = app.chats.first { $0.id == id }
+        let summary = app.chatIndex[id]
         self.sessionId = summary?.sessionId
         self.researchStage = summary?.researchStage ?? app.researchStage
     }
@@ -107,19 +113,20 @@ final class ChatRuntime: Identifiable {
 
     // MARK: chat turns
 
-    func send(_ text: String, references: [Reference]) {
+    func send(_ text: String, references: [Reference], taskPrompt: String? = nil, hiddenNote: String? = nil) {
         let msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !msg.isEmpty else { return }
         app.checkRedFlags(msg)   // deterministic Principle-6 net, before the model
+        let turn = QueuedTurn(text: msg, references: references, taskPrompt: taskPrompt, hiddenNote: hiddenNote)
         // Mid-stream: don't drop the message. Queue it (shown as a grey, deletable chip) and it
         // fires automatically the instant the current turn finishes. Claude Code answers turns
         // sequentially, so this lands the same end result as the VS Code extension's follow-ups.
         if isStreaming {
-            queued.append(QueuedTurn(text: msg, references: references))
+            queued.append(turn)
             return
         }
         isStreaming = true   // close the gate now so a fast follow-up queues instead of racing
-        task = Task { await runQueue(first: QueuedTurn(text: msg, references: references)) }
+        task = Task { await runQueue(first: turn) }
     }
 
     /// Run the first turn, then drain any messages queued while it (and each later one) streamed,
@@ -127,10 +134,10 @@ final class ChatRuntime: Identifiable {
     private func runQueue(first: QueuedTurn) async {
         // Only this task resets streaming state on NORMAL completion. If it was cancelled (Stop),
         // stop() already reset it — and a fresh turn may now own isStreaming, so don't clobber it.
-        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = ""; app.markChatFinished(id); notifyFinishedIfAway() } }
+        defer { if !Task.isCancelled { isStreaming = false; statusLine = ""; liveText = ""; app.markChatFinished(id); notifyFinishedIfAway(); app.chatTurnsFinished(id) } }
         var turn: QueuedTurn? = first
         while let t = turn, !Task.isCancelled {
-            await runTurn(t.text, t.references)
+            await runTurn(t)
             turn = queued.isEmpty ? nil : queued.removeFirst()
         }
     }
@@ -139,12 +146,23 @@ final class ChatRuntime: Identifiable {
     /// (the app isn't frontmost, or they're on a different tab). Skips the next-steps generation lane
     /// (that has its own "updated your next steps" notification).
     private func notifyFinishedIfAway() {
-        guard !id.hasPrefix("nextsteps-") else { return }
         let watching = NSApp.isActive && app.activeChatTab == id
         guard !watching else { return }
         let name = title
         NotificationService.shared.notify(title: "Rounds finished",
                                           body: name.isEmpty || name == "New chat" ? "Your answer is ready." : "“\(name)” is ready.")
+    }
+
+    /// An app-driven run (the migration) that should stop when the user presses Stop in this chat.
+    func adopt(_ t: Task<Void, Never>) { task = t }
+
+    /// Messages typed while an app-driven run (intake, filing, migration) owned this chat were queued;
+    /// once it's idle, send them like any queued follow-up.
+    func drainQueueIfIdle() {
+        guard !isStreaming, !queued.isEmpty else { return }
+        let next = queued.removeFirst()
+        isStreaming = true
+        task = Task { await runQueue(first: next) }
     }
 
     func stop() {
@@ -162,7 +180,7 @@ final class ChatRuntime: Identifiable {
         // full multi-turn memory across the respawn, so this is invisible to the conversation.
         if let w = warm, w.isAlive, warmModel == app.selectedModel, warmStage == researchStage { return }
         warm?.stop()
-        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId, stage: researchStage))
+        let w = WarmSession(model: app.selectedModel, config: app.chatRun(resume: sessionId, stage: researchStage, chatId: id))
         w.onPassive = { [weak self] event in Task { @MainActor in self?.handlePassive(event) } }
         do { try w.start(); warm = w; warmModel = app.selectedModel; warmStage = researchStage } catch { warm = nil }
     }
@@ -214,6 +232,11 @@ final class ChatRuntime: Identifiable {
                 if !reported.sources.isEmpty { sources = reported.sources }
                 if let a = reported.alert { alert = a }
             }
+        case .toolResult(let payload, let isError):
+            if !isError, let changes = Self.planChanges(fromResult: payload) {
+                phonePlanChanges += changes
+                app.reloadProblems()
+            }
         case .finished(let text, let sid, _, _):
             if !sid.isEmpty { sessionId = sid }
             let raw = text.isEmpty ? phoneLive : text
@@ -227,19 +250,17 @@ final class ChatRuntime: Identifiable {
             let display = parsed.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ProtocolParser.stripForDisplay(raw) : parsed.displayText
             if !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: display, timestamp: Date()))
+                messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: display, timestamp: Date(),
+                                            planChanges: phonePlanChanges))
                 app.markChatFinished(id)   // a phone-driven answer landed — dot it if nobody's looking
             }
+            phonePlanChanges = []
             if !parsed.sources.isEmpty { sources = parsed.sources }
             if let a = parsed.alert { alert = a }
-            if !parsed.hypotheses.isEmpty {
-                let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId, sources: parsed.sources)
-                if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
-                    messages[idx].hypotheses = saved
-                }
+            if !parsed.hypotheses.isEmpty || !parsed.stepActions.isEmpty {
+                app.absorbLegacyPlanOutput(parsed.hypotheses, parsed.stepActions)
             }
             app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
-            if !parsed.stepActions.isEmpty { let actions = parsed.stepActions; Task { await app.applyStepActions(actions) } }
         default:
             break
         }
@@ -289,16 +310,27 @@ final class ChatRuntime: Identifiable {
     Note: typing `/login` here won’t work — it only runs in a real terminal.
     """
 
-    private func runTurn(_ msg: String, _ references: [Reference]) async {
+    private func runTurn(_ turn: QueuedTurn) async {
+        let msg = turn.text, references = turn.references
         messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: msg, timestamp: Date(), references: references))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)   // shows in Recent immediately
         statusLine = "Thinking…"; liveText = ""; trace = []   // isStreaming is owned by runQueue across the whole drain
+        turnPlanChanges = []
         beginPipeline()   // a chat turn is its own mini-pipeline; the brain's <phase> markers fill it in
 
         ensureWarm()
         let stage = researchStage
         let firstTurn = (warm?.turnCount ?? 0) == 0
-        let prompt = app.chatPrompt(msg, references: references, firstTurn: firstTurn, stage: stage)
+        // A task turn (records review, migration) replaces the chat framing; otherwise the usual chat
+        // prompt. The hidden note rides along in both, after the user's message.
+        func promptFor(firstTurn: Bool) -> String {
+            if let task = turn.taskPrompt {
+                return task + "\n\n---\nThe user's message:\n\(msg)" + app.resolveReferences(references)
+                    + (turn.hiddenNote.map { "\n\n(Context from Rounds: \($0))" } ?? "")
+            }
+            return app.chatPrompt(msg, references: references, firstTurn: firstTurn, stage: stage, note: turn.hiddenNote)
+        }
+        let prompt = promptFor(firstTurn: firstTurn)
 
         var (parsed, sid, ok): (ParsedTurn, String?, Bool)
         if let w = warm {
@@ -306,12 +338,10 @@ final class ChatRuntime: Identifiable {
             if !ok {
                 if Task.isCancelled { return }   // user hit Stop — don't cold-respawn a phantom answer
                 warm?.stop(); warm = nil
-                let cold = app.chatPrompt(msg, references: references, firstTurn: true, stage: stage)
-                (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId, stage: stage)))
+                (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: promptFor(firstTurn: true), resume: sessionId, stage: stage, chatId: id)))
             }
         } else {
-            let cold = app.chatPrompt(msg, references: references, firstTurn: true, stage: stage)
-            (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: cold, resume: sessionId, stage: stage)))
+            (parsed, sid, ok) = await consume(ClaudeEngine.stream(app.chatRun(prompt: promptFor(firstTurn: true), resume: sessionId, stage: stage, chatId: id)))
         }
 
         sessionId = warm?.sessionId ?? sid
@@ -332,7 +362,9 @@ final class ChatRuntime: Identifiable {
                                     label: "Used \(trace.count) tool\(trace.count == 1 ? "" : "s")",
                                     done: true, steps: trace)]
         }
-        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(), phases: phases))
+        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(),
+                                    planChanges: turnPlanChanges, phases: phases))
+        turnPlanChanges = []
         if !parsed.sources.isEmpty {
             sources = parsed.sources
             Analytics.track(.ranSearch(sourceCount: parsed.sources.count, topTier: parsed.sources.first?.trustTier ?? "none"))
@@ -354,51 +386,30 @@ final class ChatRuntime: Identifiable {
         Analytics.track(.turnCompleted(refusal: overRefusal ? "over" : (refused ? "evidence" : "none"),
                                        retried: false, recovered: false))
         liveText = ""
-        // The chat surfaced a NEW or revised next step — the app persists it (chat is read-only) so
-        // it shows on the dashboard, and we attach it to this message so it renders inline as a card.
-        if !parsed.hypotheses.isEmpty {
-            let saved = app.persistChatHypotheses(parsed.hypotheses, sessionId: sessionId, sources: parsed.sources)
-            if !saved.isEmpty, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
-                messages[idx].hypotheses = saved
-            }
+        // Legacy plan output (a resumed old session printing next-step JSON) is kept, not dropped.
+        if !parsed.hypotheses.isEmpty || !parsed.stepActions.isEmpty {
+            app.absorbLegacyPlanOutput(parsed.hypotheses, parsed.stepActions)
         }
+        if let a = parsed.alert, a != app.urgentBanner, isBackgroundTask { app.urgentBanner = a }
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
         generateTitleIfNeeded()
-        // The brain asked to fix/translate/restatus a next-step card — apply it in the
-        // background (chat is read-only; the app does the controlled write), then the dashboard refreshes.
-        if !parsed.stepActions.isEmpty {
-            let actions = parsed.stepActions
-            Task { await app.applyStepActions(actions) }
-        }
     }
 
-    // MARK: next-steps generation (runs THROUGH this chat so it's a live, openable session)
+    /// A chat the app started on its own (review / answer / migration) — its alerts also go to Home.
+    private var isBackgroundTask: Bool { app.busyPeople.values.contains(id) || app.migrationChatId == id }
 
-    /// Drive a next-steps GENERATION run through this chat: seed the request immediately (so the
-    /// chat appears and, if opened, shows live work — the trace + streaming text — instead of an
-    /// empty/stale view), stream it, then finalize. The model writes the hypothesis files itself;
-    /// we return the parsed turn so the caller can raise any alert. Appends to the transcript so a
-    /// prior conversation isn't wiped.
-    @discardableResult
-    func runGeneration(_ run: ClaudeRun, userText: String, title: String, initialStatus: String) async -> ParsedTurn {
-        messages.append(ChatMessage(id: UUID().uuidString, role: .user, text: userText, timestamp: Date()))
-        generatedTitle = title
-        app.persistChat(id, messages, sources, sessionId, title: title)   // visible in Recent at once
-        isStreaming = true
-        statusLine = initialStatus; liveText = ""; trace = []
-        defer { isStreaming = false; statusLine = ""; liveText = ""; app.markChatFinished(id) }
-
-        let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
-        if let sid, !sid.isEmpty { sessionId = sid }
-        let answer = parsed.displayText.isEmpty ? liveText : parsed.displayText
-        let finalText = answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Updated your next steps — they're on your dashboard." : answer
-        finishPhases()
-        messages.append(ChatMessage(id: UUID().uuidString, role: .assistant, text: finalText, timestamp: Date(), phases: phases))
-        if !parsed.sources.isEmpty { sources = parsed.sources }
-        liveText = ""
-        app.persistChat(id, messages, sources, sessionId, title: title)
-        return parsed
+    /// The `changed` list from a `problems_update` tool result — what this turn did to the plan.
+    static func planChanges(fromResult payload: String) -> [PlanChange]? {
+        guard payload.contains("\"changed\""), payload.contains("\"revision\""),
+              let start = payload.firstIndex(of: "{"), let end = payload.lastIndex(of: "}"),
+              let data = String(payload[start...end]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["ok"] as? Bool) == true, let person = obj["person"] as? String,
+              let changed = obj["changed"] as? [[String: Any]] else { return nil }
+        return changed.compactMap { c in
+            guard let op = c["op"] as? String, let id = c["id"] as? String else { return nil }
+            return PlanChange(op: op, id: id, title: (c["title"] as? String) ?? "", status: c["status"] as? String, person: person)
+        }
     }
 
     // MARK: one-shot (used by intake into this chat's view)
@@ -406,8 +417,8 @@ final class ChatRuntime: Identifiable {
     @discardableResult
     func runOneShot(_ run: ClaudeRun, initialStatus: String) async -> ParsedTurn {
         isStreaming = true
-        statusLine = initialStatus; liveText = ""; trace = []
-        defer { isStreaming = false; statusLine = ""; liveText = "" }
+        statusLine = initialStatus; liveText = ""; trace = []; turnPlanChanges = []
+        defer { isStreaming = false; statusLine = ""; liveText = ""; drainQueueIfIdle() }
         let (parsed, sid, _) = await consume(ClaudeEngine.stream(run))
         if let sid, !sid.isEmpty { sessionId = sid }
         finishPhases()   // close this leg's phases so the NEXT leg's early tools don't attach to a stale dot
@@ -420,12 +431,16 @@ final class ChatRuntime: Identifiable {
         guard !isStreaming else { return }
         messages = app.loadTranscript(id)
         sources = VaultStore.loadChatSources(id, app.vault)
-        sessionId = app.chats.first { $0.id == id }?.sessionId
+        sessionId = app.chatIndex[id]?.sessionId
     }
 
-    func append(_ role: ChatRole, _ text: String, phases: [PipelinePhase] = []) {
+    /// Plan changes captured by the last one-shot run (filing's plan-update turn), handed to its message.
+    func takePlanChanges() -> [PlanChange] { defer { turnPlanChanges = [] }; return turnPlanChanges }
+
+    func append(_ role: ChatRole, _ text: String, phases: [PipelinePhase] = [], planChanges: [PlanChange] = []) {
         guard !text.isEmpty else { return }
-        messages.append(ChatMessage(id: UUID().uuidString, role: role, text: text, timestamp: Date(), phases: phases))
+        messages.append(ChatMessage(id: UUID().uuidString, role: role, text: text, timestamp: Date(),
+                                    planChanges: planChanges, phases: phases))
         app.persistChat(id, messages, sources, sessionId, title: generatedTitle)
         generateTitleIfNeeded()
     }
@@ -469,7 +484,21 @@ final class ChatRuntime: Identifiable {
         liveTokens = 0; tokenBase = 0; lastMsgTokens = 0
         trace = []; statusLine = ""; liveText = ""   // fresh turn — don't carry over the previous run's steps
         phasesParsed = 0   // each run has its own fullText; phases already pushed stay, new markers count from 0
+        // Token deltas arrive dozens of times a second. Re-deriving the visible text (a full protocol
+        // parse of everything streamed so far) on each one made long answers O(n²) on the main thread
+        // and re-rendered the chat per token. Coalesce: publish at most ~14×/s, and flush on any other
+        // event and at the end so nothing is ever left unshown.
+        var liveDirty = false
+        var lastFlush = ContinuousClock.now
+        func flushLive() {
+            guard liveDirty else { return }
+            liveDirty = false
+            lastFlush = .now
+            liveText = ProtocolParser.stripForDisplay(fullText)
+            syncModelPhases(fullText)   // lift any new <phase> markers into the timeline, live
+        }
         for await event in stream {
+            if case .textDelta = event {} else { flushLive() }
             switch event {
             case .started(let s, _):
                 sid = s
@@ -483,8 +512,8 @@ final class ChatRuntime: Identifiable {
                 if !c.isEmpty { app.slashCommands = c }   // power the / autocomplete
             case .textDelta(let t):
                 fullText += t
-                liveText = ProtocolParser.stripForDisplay(fullText)
-                syncModelPhases(fullText)   // lift any new <phase> markers into the timeline, live
+                liveDirty = true
+                if ContinuousClock.now - lastFlush > .milliseconds(70) { flushLive() }
             case .toolUse(let n, let i):
                 // report_* tools carry channel data in their INPUT payload — capture it and update the
                 // UI live, but keep them OUT of the visible research trace (they're internal reporting).
@@ -508,6 +537,11 @@ final class ChatRuntime: Identifiable {
                     if let p = phases.indices.last, phases[p].steps.last == last { phases[p].steps[phases[p].steps.count - 1] = last + " — failed" }
                 }
                 statusLine = isError ? (trace.last ?? "A step failed") : "Thinking…"
+                if !isError, let changes = Self.planChanges(fromResult: payload) {
+                    turnPlanChanges += changes
+                    app.reloadProblems()   // Home reflects the change right away
+                    continue
+                }
                 let c = ProtocolParser.citationsFromToolResult(payload)
                 if !c.isEmpty { sources = c }
             case .finished(let t, let s, let e, _):
@@ -526,6 +560,7 @@ final class ChatRuntime: Identifiable {
                 break   // remote-control / phone-driven events are handled passively, not in a local turn
             }
         }
+        flushLive()
         // Prefer channels reported via tools this turn; fall back to any legacy JSON in the text.
         let merged = ProtocolParser.merge(base: ProtocolParser.parse(fullText), tools: toolReported)
         return (merged, sid, completed && !hadError)

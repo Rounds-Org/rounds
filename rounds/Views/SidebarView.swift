@@ -287,7 +287,7 @@ private struct ChatRow: View {
 
     private var isActive: Bool { app.activeTab == .chat(id) }
     private var unread: Bool { app.isChatUnread(id) }
-    private var summary: ChatSummary? { app.chats.first { $0.id == id } }
+    private var summary: ChatSummary? { app.chatIndex[id] }
 
     var body: some View {
         Button { app.selectTab(.chat(id)) } label: {

@@ -154,7 +154,7 @@ OBSOLETE design note (kept for context): full power used to route `Write|Edit|Mu
 ## Chat file message delimiters
 
 Chat `.md` files use `<!-- rounds:msg role=<role> -->` HTML comment sentinels as message boundaries (written by `persistChat`, parsed by `loadChat`). Do NOT revert to `## role` headers — an assistant response containing a `## Heading` would be parsed as a role boundary and silently truncate the message on reload. Legacy files with `## role` are still parsed (bare role lines only, not in-body headings).
-The sentinel also carries a message's attachments: `<!-- rounds:msg role=<role> refs=<base64-json of [Reference]> -->`. `persistChat` writes `refs=` when a message has references and `loadTranscript` decodes them back into `ChatMessage.references` — do NOT drop this, or file attachments (the thumbnails/inline images in the transcript) vanish on close/reopen even though the files survive in `chats/attachments/<chatId>/`. base64 has no spaces, so the role/refs split (`split(separator:" ", maxSplits:1)`) stays unambiguous.
+The sentinel also carries a message's attachments: `<!-- rounds:msg role=<role> refs=<base64-json of [Reference]> -->`. `persistChat` writes `refs=` when a message has references and `loadTranscript` decodes them back into `ChatMessage.references` — do NOT drop this, or file attachments (the thumbnails/inline images in the transcript) vanish on close/reopen even though the files survive in `chats/attachments/<chatId>/`. The sentinel may also carry `plan=<base64-json of [PlanChange]>` (the inline "Plan updated" card). base64 has no spaces, so `loadTranscript` splits the sentinel on spaces and reads each `key=value` token after the role — keep values space-free.
 <!-- auto-added 2026-06-23 -->
 
 ## Chat input: native NSTextView required
@@ -196,13 +196,25 @@ There are currently NO Rounds-native intercepted slash commands — every `/`-pr
 
 ## Chat finish notifications: only when not watching
 
-`notifyFinishedIfAway()` must fire ONLY when `!(NSApp.isActive && app.activeChatTab == id)`. Do NOT notify if the user is already on that chat tab with the app frontmost — it's noise. Also skip any chat whose `id` starts with `nextsteps-`; those chats send their own "updated your next steps" notification via a separate path.
+`notifyFinishedIfAway()` must fire ONLY when `!(NSApp.isActive && app.activeChatTab == id)`. Do NOT notify if the user is already on that chat tab with the app frontmost — it's noise.
 <!-- auto-added 2026-07-02 -->
 
-## Hypothesis status changes must be deterministic — never ask the LLM
+## Next steps = a per-person PROBLEM LIST (problems → steps), one shared plan
 
-Do NOT route done/dismiss/snooze/activate status changes through the brain. Call `app.setHypothesisStatusLocally(id, status)` (updates `AppState.hypotheses` in-memory + writes via `VaultStore.setHypothesisStatus`). The LLM path is flaky and caused Home to stay out of sync with what the chat confirmed was resolved. The "Mark as resolved" button in `HypothesisCard` must appear ONLY in the expanded state (beside the large "Chat about this" button), not in the collapsed card.
-<!-- auto-added 2026-07-10 -->
+Next steps are not a flat pile of cards any more. Each person has `people/<slug>/problems.json`: problems (what's going on) and, under each, the steps that address it. EVERY session (any chat, the filing chat's follow-up turn, a "Review" chat, the one-time migration chat) reads/changes it through the rounds-sources MCP tools `problems_get` / `problems_update` (patch ops applied under a per-person `mkdir` lock `people/<slug>/.problems.lock`, atomic temp+rename, `revision` bumped). The rules for WHEN/HOW to change it live in `brain/claude/CLAUDE.md` ("THE PROBLEM LIST") — that file is auto-loaded into every Claude session in the vault, so the plan stays coherent wherever the conversation happens.
+- Do NOT bring back a separate next-steps generator lane or per-person `nextsteps-<slug>` chat (removed on purpose — the user disliked one ever-growing chat per person). "Review" on Home, answering a question on Home, and language changes each start an ordinary background chat (`AppState.startBackgroundChat`).
+- Deterministic actions (done / not relevant / reopen / answer / resolve a problem) go through `ProblemStore` (Swift, same lock protocol) — never through the LLM. Legacy flat cards (`hypotheses/`) are read-only history, shown only until a person's list has `migratedLegacy: true`.
+- Never let a model hand-edit `problems.json`; never write it from Swift without `ProblemStore.mutate` (the lock is what makes parallel sessions safe — tested with 6 concurrent writers).
+- The app learns about changes from the `problems_update` tool result in the stream (`ChatRuntime.planChanges(fromResult:)` → inline "Plan updated" card, persisted as `plan=` in the chat sentinel) and from a 1.5 s mtime watcher (`startProblemWatcher`) for writes by any other session.
+
+## Performance rules (the app used to hang 0.3–1.1 s per chat switch)
+
+- Chat transcript: `LazyVStack` of `MessageRow(...).equatable()`; the screen is split so each subview observes only its own `ChatRuntime` fields (`ChatHeader`, `ChatTranscript`, `LiveTurn`, `ChatInputBar`). Never read `liveText`/`trace`/`statusLine` in a parent that also builds the message list.
+- Markdown → `AttributedString` is cached (`MarkdownText.cachedAttributed` / `cachedHasTable`); don't call `fullAttributed` in a body for persisted content.
+- Streaming deltas are coalesced (~14 updates/s) in `ChatRuntime.consume`; don't re-derive `liveText` per token.
+- No vault scans on the main thread: `reload()` loads off-main and applies only changed collections; `persistChat` upserts one `ChatSummary` instead of rescanning `chats/`; chat front-matter reads only the first 2 KB.
+- `AppState.activeRuntime` must stay a non-mutating lookup (views call it).
+
 ## Model list is LIVE from Claude Code — never hardcode model names/versions
 
 `RoundsModel` is a string wrapper around the `--model` value; names/descriptions/effort levels come from `ModelCatalog`, which sends an `initialize` control_request to `claude -p --input-format stream-json` and reads `models` from the `control_response` (no prompt, no tokens). Cached in UserDefaults (`rounds.modelCatalog.v1`), refreshed at launch and on app activation (throttled 1 h). Do NOT reintroduce a hardcoded enum like "Opus 4.8 / Sonnet 4.6" — it goes stale on every model release. Default stays the `opus` alias (Claude Code resolves it to the newest Opus). `--effort` is only passed when the selected model lists that level (Haiku takes none).

@@ -170,16 +170,24 @@ nonisolated enum ProtocolParser {
         guard payload.contains("\"title\"") else { return [] }
         guard let data = payload.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        // Only literature-shaped records are sources. A problem list (problems_get/_update), or some
+        // other MCP server's titled items (mail, docs…), must never land in the Sources panel.
+        func looksLikeCitation(_ o: [String: Any]) -> Bool {
+            ["pmid", "doi", "journal", "trustTier", "tier", "pubTypes", "nctId", "url"].contains { o[$0] != nil }
+                && o["steps"] == nil && o["kind"] == nil
+        }
         var arr: [[String: Any]] = []
         if let a = obj as? [[String: Any]] { arr = a }
         else if let d = obj as? [String: Any] {
+            if d["problems"] != nil || d["people"] != nil || d["changed"] != nil { return [] }
             for key in ["citations", "results", "ranked", "sources"] {
                 if let c = d[key] as? [[String: Any]] { arr = c; break }
             }
-            if arr.isEmpty {   // fallback: first array-of-objects that has titles
-                for v in d.values { if let c = v as? [[String: Any]], c.first?["title"] != nil { arr = c; break } }
+            if arr.isEmpty {   // fallback: first array of citation-shaped objects
+                for v in d.values { if let c = v as? [[String: Any]], let f = c.first, f["title"] != nil, looksLikeCitation(f) { arr = c; break } }
             }
         }
+        arr = arr.filter(looksLikeCitation)
         guard !arr.isEmpty else { return [] }
         return arr.prefix(8).enumerated().map { (i, o) in
             let pmid = o["pmid"] as? String

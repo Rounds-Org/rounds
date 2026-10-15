@@ -2,7 +2,8 @@
   "mcpServers": {
     "rounds-sources": {
       "command": "{{NODE_PATH}}",
-      "args": ["{{MCP_INDEX_PATH}}"]
+      "args": ["{{MCP_INDEX_PATH}}"],
+      "env": { "ROUNDS_VAULT": "{{VAULT_PATH}}" }
     }
   }
 }

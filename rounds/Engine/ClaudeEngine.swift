@@ -205,6 +205,9 @@ nonisolated struct ClaudeRun: Sendable {
     /// Evidence-maturity window for this run. Exported to the child process as
     /// `ROUNDS_RESEARCH_STAGE` so the `rounds-sources` MCP server can hard-cap which tiers it returns.
     var researchStage: RoundsResearchStage = .default
+    /// The Rounds chat this run belongs to — exported as `ROUNDS_CHAT_ID` so problem-list edits made by
+    /// the `rounds-sources` MCP server record which conversation changed the plan.
+    var chatId: String? = nil
 }
 
 nonisolated enum ClaudeEngine {
@@ -242,6 +245,8 @@ nonisolated enum ClaudeEngine {
             env["CI"] = "1"
             // Hard-cap the evidence tiers the sources MCP will return (1…4). Inherited by the MCP child.
             env["ROUNDS_RESEARCH_STAGE"] = String(run.researchStage.index)
+            env["ROUNDS_VAULT"] = run.cwd.path
+            if let c = run.chatId { env["ROUNDS_CHAT_ID"] = c }
             proc.environment = env
 
             let outPipe = Pipe()

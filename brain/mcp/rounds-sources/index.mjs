@@ -6,6 +6,10 @@
 //   - find_trials       : ClinicalTrials.gov API v2
 //   - drug_label        : openFDA /drug/label.json (T0 authoritative fact)
 //   - rank_sources      : deterministic trust-ranking model over a citation list
+//   - problems_get / problems_update : the per-person PROBLEM LIST (problems → next steps), the one
+//                         shared plan every Rounds session reads and edits. Writes are small patch
+//                         operations applied under a per-person lock, so parallel sessions never
+//                         clobber each other.
 //
 // Pure Node 18+ ESM. NO npm dependencies. Uses the global `fetch`. Runs as `node index.mjs`.
 // Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout, implemented by hand.
@@ -13,12 +17,15 @@
 
 'use strict';
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 // ---------------------------------------------------------------------------
 // Constants / configuration
 // ---------------------------------------------------------------------------
 
 const SERVER_NAME = 'rounds-sources';
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = '1.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 // NCBI requires identifying every request. Sending these is mandatory — omitting them
@@ -1388,6 +1395,52 @@ const TOOLS = [
     },
   },
   // -------------------------------------------------------------------------
+  // The PROBLEM LIST — the shared plan. Real tools: they read/write people/<slug>/problems.json.
+  // -------------------------------------------------------------------------
+  {
+    name: 'problems_get',
+    description:
+      'Read the PROBLEM LIST — the single shared plan of what is going on with a person and what to do next ' +
+      '(problems, each with its next steps). Call it BEFORE you reason about or change anyone\'s plan, so you work ' +
+      'from the current state (other Rounds sessions may have changed it a minute ago). With `person` → that ' +
+      'person\'s full list (summaries, step details, sources). Without it → a compact overview of everyone.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        person: { type: 'string', description: 'Person slug (folder name under people/, e.g. "_self", "mother").' },
+        compact: { type: 'boolean', description: 'Omit step details and sources (titles/status only). Default false.' },
+      },
+    },
+  },
+  {
+    name: 'problems_update',
+    description:
+      'Change a person\'s PROBLEM LIST with small patch operations (applied atomically, under a lock, on top of ' +
+      'whatever other sessions wrote). NEVER edit problems.json by hand — always use this tool. Ops:\n' +
+      '• {op:"upsert_problem", problem:{id?, title, status?, priority?, summary?, sources?}} — create (no/unknown id) ' +
+      'or update fields of a problem. status ∈ active|watching|resolved|ruled-out; priority ∈ high|medium|low.\n' +
+      '• {op:"upsert_step", problem:"<problem id>", step:{id?, title, whyNow, kind, priority?, status?, detail?, ask?, sources?}} ' +
+      '— create or update a next step under a problem (an existing step id is updated and moved there). ' +
+      'kind ∈ get-more-data|try-something|see-specialist|watch|ask-user|needs-exam; status ∈ open|done|dismissed|superseded|snoozed. ' +
+      '`detail` = the full markdown argument; `ask` = {placeholder} for ask-user questions.\n' +
+      '• {op:"set_status", id:"<problem or step id>", status, reason?, supersededBy?} — resolve / dismiss / supersede / reopen.\n' +
+      '• {op:"answer_step", id:"<ask-user step id>", answer:"<verbatim answer>"} — record a history answer (marks it done).\n' +
+      '• {op:"move_step", id:"<step id>", to:"<problem id>"} and {op:"merge_problems", from:"<id>", into:"<id>"} — reorganize.\n' +
+      'In ONE call, send every op of one coherent change (e.g. add the new step AND supersede the one it replaces). ' +
+      'Problem ids you create in this call can be referenced by later ops in the same call. Returns the resulting ' +
+      'list — if it shows changes you did not make that conflict with yours, reconcile them with another call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        person: { type: 'string', description: 'Person slug (folder under people/).' },
+        ops: { type: 'array', description: 'Patch operations, applied in order, all-or-nothing.', items: { type: 'object' } },
+        note: { type: 'string', description: 'One short line on why (kept in the problem log).' },
+        markMigrated: { type: 'boolean', description: 'Only for the one-time move of legacy next steps into problems.' },
+      },
+      required: ['person', 'ops'],
+    },
+  },
+  // -------------------------------------------------------------------------
   // report_* — UI channel tools. Rounds captures these tool calls' INPUT payload directly from the
   // stream and renders it natively (sources panel, alert banner, next-step cards). Call these INSTEAD
   // of printing rounds.* JSON blocks in your answer text — that keeps the chat clean and renders
@@ -1423,34 +1476,6 @@ const TOOLS = [
         alert: { type: 'object', description: 'The alert object (same shape as the legacy rounds.alert block: title, message, severity, etc.).' },
       },
       required: ['alert'],
-    },
-  },
-  {
-    name: 'report_hypotheses',
-    description:
-      'Report new or revised next-step cards this turn produced. Rounds renders them as inline cards and on the ' +
-      'dashboard. Call INSTEAD of printing a rounds.hypotheses JSON block.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        hypotheses: { type: 'array', description: 'Hypothesis objects (same shape as the legacy rounds.hypotheses block).', items: { type: 'object' } },
-      },
-      required: ['hypotheses'],
-    },
-  },
-  {
-    name: 'report_step_action',
-    description:
-      'Apply a reversible change to an existing next-step card the user referenced (relanguage|done|dismiss|snooze|activate). ' +
-      'Call INSTEAD of printing a rounds.step_action JSON block.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'The step/card id.' },
-        action: { type: 'string', description: 'relanguage | done | dismiss | snooze | activate' },
-        answer: { type: 'string', description: 'Optional freeform answer when the action needs one.' },
-      },
-      required: ['id', 'action'],
     },
   },
   {
@@ -1504,11 +1529,370 @@ const TOOL_HANDLERS = {
   rank_sources: tool_rank_sources,
   report_sources: tool_report_ack('sources'),
   report_alert: tool_report_ack('alert'),
-  report_hypotheses: tool_report_ack('hypotheses'),
-  report_step_action: tool_report_ack('step_action'),
+  problems_get: tool_problems_get,
+  problems_update: tool_problems_update,
   report_questions: tool_report_ack('questions'),
   report_turn_meta: tool_report_ack('turn_meta'),
 };
+
+// ---------------------------------------------------------------------------
+// PROBLEM LIST — people/<slug>/problems.json
+//
+// The shared plan: problems (what is going on) → next steps (what to do about each). Every Rounds
+// session — chats, document filing, reviews — edits it through these patch ops, so the plan stays ONE
+// coherent thing instead of a pile of independent cards. Concurrency: a per-person lock directory
+// (mkdir is atomic) serializes writers across processes (each Claude session runs its own copy of this
+// server, and the Rounds app uses the same lock); ops are field-level patches applied to the freshest
+// file under the lock, and the file is replaced atomically (write temp + rename).
+// ---------------------------------------------------------------------------
+
+const VAULT_ROOT = process.env.ROUNDS_VAULT || process.cwd();
+const PROBLEM_STATUSES = ['active', 'watching', 'resolved', 'ruled-out'];
+const STEP_STATUSES = ['open', 'done', 'dismissed', 'superseded', 'snoozed'];
+const STEP_KINDS = ['get-more-data', 'try-something', 'see-specialist', 'watch', 'ask-user', 'needs-exam'];
+const PRIORITIES = ['high', 'medium', 'low'];
+
+function peopleDir() { return path.join(VAULT_ROOT, 'people'); }
+function listPeople() {
+  try {
+    return fs.readdirSync(peopleDir(), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+      .map((d) => d.name);
+  } catch { return []; }
+}
+function problemsPath(slug) { return path.join(peopleDir(), slug, 'problems.json'); }
+function nowIso() { return new Date().toISOString(); }
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+function checkPerson(slug) {
+  if (typeof slug !== 'string' || !/^[A-Za-z0-9_.-]{1,80}$/.test(slug) || slug.startsWith('.')) {
+    throw new Error(`"person" must be a person slug (one of: ${listPeople().join(', ') || 'none yet'})`);
+  }
+  if (!fs.existsSync(path.join(peopleDir(), slug))) {
+    throw new Error(`Unknown person "${slug}". Existing people: ${listPeople().join(', ') || 'none yet'}`);
+  }
+}
+
+function withProblemLock(slug, fn) {
+  const lockDir = path.join(peopleDir(), slug, '.problems.lock');
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    try { fs.mkdirSync(lockDir); break; } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try {
+        // A crashed writer can't hold the lock forever.
+        if (Date.now() - fs.statSync(lockDir).mtimeMs > 20000) { fs.rmSync(lockDir, { recursive: true, force: true }); continue; }
+      } catch { /* raced with its removal — just retry */ }
+      if (Date.now() > deadline) throw new Error('The problem list is busy (another session is writing). Retry in a moment.');
+      sleepSync(25);
+    }
+  }
+  try { return fn(); } finally { try { fs.rmdirSync(lockDir); } catch { /* already gone */ } }
+}
+
+function readProblemList(slug) {
+  let raw;
+  try { raw = fs.readFileSync(problemsPath(slug), 'utf8'); } catch (e) {
+    if (e.code === 'ENOENT') return { schemaVersion: 1, person: slug, revision: 0, problems: [] };
+    throw e;
+  }
+  let o;
+  try { o = JSON.parse(raw); } catch (e) {
+    throw new Error(`people/${slug}/problems.json is not valid JSON (${e.message}). Do not hand-edit it; tell the user.`);
+  }
+  if (!o || typeof o !== 'object') o = {};
+  if (!Array.isArray(o.problems)) o.problems = [];
+  for (const p of o.problems) if (!Array.isArray(p.steps)) p.steps = [];
+  o.schemaVersion = 1; o.person = slug;
+  return o;
+}
+
+function writeProblemList(slug, list) {
+  const p = problemsPath(slug);
+  const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(list, null, 2) + '\n');
+  fs.renameSync(tmp, p);
+}
+
+function normStepStatus(s) {
+  const v = String(s || '').toLowerCase().trim();
+  if (['proposed', 'active', 'todo', 'pending', 'open'].includes(v)) return 'open';
+  if (['resolved', 'completed', 'complete', 'answered', 'done'].includes(v)) return 'done';
+  if (['not-relevant', 'irrelevant', 'no-longer-relevant', 'dismiss', 'dismissed'].includes(v)) return 'dismissed';
+  if (['snooze', 'snoozed'].includes(v)) return 'snoozed';
+  if (['superseded', 'replaced'].includes(v)) return 'superseded';
+  throw new Error(`step status "${s}" — use one of ${STEP_STATUSES.join('|')}`);
+}
+function normProblemStatus(s) {
+  const v = String(s || '').toLowerCase().trim();
+  if (['active', 'open', 'current'].includes(v)) return 'active';
+  if (['watching', 'monitoring', 'monitor', 'watch'].includes(v)) return 'watching';
+  if (['resolved', 'done', 'closed'].includes(v)) return 'resolved';
+  if (['ruled-out', 'ruled out', 'excluded', 'dismissed'].includes(v)) return 'ruled-out';
+  throw new Error(`problem status "${s}" — use one of ${PROBLEM_STATUSES.join('|')}`);
+}
+function normPriority(p, def) {
+  if (p === undefined || p === null || p === '') return def;
+  const v = String(p).toLowerCase().trim();
+  if (!PRIORITIES.includes(v)) throw new Error(`priority "${p}" — use one of ${PRIORITIES.join('|')}`);
+  return v;
+}
+function normKind(k) {
+  const v = String(k || 'get-more-data').toLowerCase().trim();
+  if (!STEP_KINDS.includes(v)) throw new Error(`step kind "${k}" — use one of ${STEP_KINDS.join('|')}`);
+  return v;
+}
+function normSources(arr) {
+  if (!Array.isArray(arr)) return undefined;
+  return arr.filter((x) => x && typeof x === 'object').map((x, i) => {
+    const o = { id: String(x.id || `S${i + 1}`), title: String(x.title || x.ref || x.citation || 'Source') };
+    const url = x.url || (x.doi ? `https://doi.org/${x.doi}` : x.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${x.pmid}/` : null);
+    if (url) o.url = String(url);
+    const tier = x.tier || x.trustTier; if (tier) o.tier = String(tier);
+    for (const k of ['type', 'journal', 'whyTrusted', 'maturity', 'caution']) if (x[k]) o[k] = String(x[k]);
+    if (x.year) o.year = Number(x.year) || undefined;
+    return o;
+  });
+}
+function bestStepTier(sources) {
+  let best = null;
+  for (const s of sources || []) {
+    const i = TIER_ORDER.indexOf(String(s.tier || '').toUpperCase());
+    if (i >= 0 && (best === null || i < best)) best = i;
+  }
+  return best === null ? undefined : TIER_ORDER[best];
+}
+function cleanId(id, prefix) {
+  if (typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,90}$/.test(id)) return id;
+  const d = new Date().toISOString().slice(0, 10);
+  return `${prefix}_${d}_${Math.random().toString(36).slice(2, 7)}`;
+}
+function text(v, max) {
+  if (v === undefined || v === null) return undefined;
+  const s = String(v);
+  return max && s.length > max ? s.slice(0, max) : s;
+}
+function findProblem(list, id) { return list.problems.find((p) => p.id === id); }
+function findStep(list, id) {
+  for (const p of list.problems) {
+    const i = p.steps.findIndex((s) => s.id === id);
+    if (i >= 0) return { problem: p, index: i, step: p.steps[i] };
+  }
+  return null;
+}
+function logTo(problem, by, note) {
+  if (!note) return;
+  problem.log = Array.isArray(problem.log) ? problem.log : [];
+  problem.log.push({ at: nowIso(), by, note: text(note, 300) });
+  if (problem.log.length > 30) problem.log = problem.log.slice(-30);
+}
+
+const PROBLEM_RANK = { active: 0, watching: 1, resolved: 2, 'ruled-out': 3 };
+const STEP_RANK = { open: 0, snoozed: 1, done: 2, superseded: 3, dismissed: 4 };
+const PRIO_RANK = { high: 0, medium: 1, low: 2 };
+function sortList(list) {
+  list.problems.sort((a, b) => (PROBLEM_RANK[a.status] ?? 9) - (PROBLEM_RANK[b.status] ?? 9)
+    || (PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9));
+  for (const p of list.problems) {
+    p.steps.sort((a, b) => (STEP_RANK[a.status] ?? 9) - (STEP_RANK[b.status] ?? 9)
+      || (PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9));
+  }
+}
+
+function applyProblemOp(list, op, by, changed) {
+  if (!op || typeof op !== 'object') throw new Error('each op must be an object');
+  const t = nowIso();
+  switch (op.op) {
+    case 'upsert_problem': {
+      const src = op.problem || {};
+      let p = src.id ? findProblem(list, src.id) : null;
+      if (!p) {
+        if (!src.title) throw new Error('upsert_problem: a new problem needs a "title"');
+        p = { id: cleanId(src.id, 'prob'), title: '', status: 'active', priority: 'medium', summary: '',
+              sources: [], steps: [], createdAt: t };
+        list.problems.push(p);
+        changed.push({ op: 'add_problem', id: p.id, title: text(src.title, 200) });
+      } else {
+        changed.push({ op: 'update_problem', id: p.id, title: text(src.title, 200) || p.title });
+      }
+      if (src.title !== undefined) p.title = text(src.title, 200);
+      if (src.status !== undefined) p.status = normProblemStatus(src.status);
+      p.priority = normPriority(src.priority, p.priority || 'medium');
+      if (src.summary !== undefined) p.summary = text(src.summary, 4000);
+      const ss = normSources(src.sources); if (ss) p.sources = ss;
+      p.updatedAt = t; p.updatedBy = by;
+      return;
+    }
+    case 'upsert_step': {
+      const src = op.step || {};
+      const target = findProblem(list, op.problem || op.problemId);
+      const found = src.id ? findStep(list, src.id) : null;
+      if (!target && !found) {
+        throw new Error(`upsert_step: unknown problem "${op.problem}". Create it first with upsert_problem (same call is fine).`);
+      }
+      let s;
+      if (found) {
+        s = found.step;
+        if (target && target !== found.problem) {          // moved to another problem
+          found.problem.steps.splice(found.index, 1);
+          target.steps.push(s);
+        }
+        changed.push({ op: 'update_step', id: s.id, title: text(src.title, 300) || s.title, problem: (target || found.problem).id });
+      } else {
+        if (!src.title) throw new Error('upsert_step: a new step needs a "title"');
+        s = { id: cleanId(src.id, 'step'), title: '', whyNow: '', kind: 'get-more-data', priority: 'medium',
+              status: 'open', createdAt: t };
+        target.steps.push(s);
+        changed.push({ op: 'add_step', id: s.id, title: text(src.title, 300), problem: target.id });
+      }
+      if (src.title !== undefined) s.title = text(src.title, 300);
+      if (src.whyNow !== undefined || src.why_now !== undefined) s.whyNow = text(src.whyNow ?? src.why_now, 600);
+      if (src.kind !== undefined) s.kind = normKind(src.kind);
+      s.priority = normPriority(src.priority, s.priority || 'medium');
+      if (src.status !== undefined) s.status = normStepStatus(src.status);
+      if (src.detail !== undefined || src.body !== undefined) s.detail = text(src.detail ?? src.body, 20000);
+      if (src.ask && typeof src.ask === 'object') s.ask = { placeholder: text(src.ask.placeholder, 300) || '' };
+      if (s.kind === 'ask-user' && !s.ask) s.ask = { placeholder: '' };
+      const ss = normSources(src.sources);
+      if (ss) { s.sources = ss; s.sourceCount = ss.length; s.topTier = text(src.topTier, 12) || bestStepTier(ss); }
+      else if (src.topTier) s.topTier = text(src.topTier, 12);
+      s.updatedAt = t; s.updatedBy = by;
+      const owner = target || found.problem; owner.updatedAt = t;
+      return;
+    }
+    case 'set_status': {
+      const id = op.id;
+      const p = findProblem(list, id);
+      if (p) {
+        p.status = normProblemStatus(op.status); p.updatedAt = t; p.updatedBy = by;
+        logTo(p, by, `status → ${p.status}${op.reason ? ': ' + op.reason : ''}`);
+        changed.push({ op: 'problem_status', id, title: p.title, status: p.status });
+        return;
+      }
+      const f = findStep(list, id);
+      if (!f) throw new Error(`set_status: no problem or step with id "${id}"`);
+      f.step.status = normStepStatus(op.status); f.step.updatedAt = t; f.step.updatedBy = by;
+      if (op.supersededBy) f.step.supersededBy = text(op.supersededBy, 90);
+      if (op.reason) f.step.statusReason = text(op.reason, 400);
+      f.problem.updatedAt = t;
+      changed.push({ op: 'step_status', id, title: f.step.title, status: f.step.status, problem: f.problem.id });
+      return;
+    }
+    case 'answer_step': {
+      const f = findStep(list, op.id);
+      if (!f) throw new Error(`answer_step: no step with id "${op.id}"`);
+      if (!op.answer || !String(op.answer).trim()) throw new Error('answer_step: "answer" is required');
+      f.step.answer = text(op.answer, 4000); f.step.answeredAt = t.slice(0, 10);
+      f.step.status = 'done'; f.step.updatedAt = t; f.step.updatedBy = by; f.problem.updatedAt = t;
+      changed.push({ op: 'answered', id: op.id, title: f.step.title, problem: f.problem.id });
+      list.__history = list.__history || [];
+      list.__history.push({ question: f.step.title, answer: f.step.answer, id: f.step.id, date: f.step.answeredAt });
+      return;
+    }
+    case 'move_step': {
+      const f = findStep(list, op.id);
+      const to = findProblem(list, op.to);
+      if (!f) throw new Error(`move_step: no step with id "${op.id}"`);
+      if (!to) throw new Error(`move_step: no problem with id "${op.to}"`);
+      if (to !== f.problem) { f.problem.steps.splice(f.index, 1); to.steps.push(f.step); }
+      f.step.updatedAt = t; to.updatedAt = t;
+      changed.push({ op: 'move_step', id: op.id, title: f.step.title, problem: to.id });
+      return;
+    }
+    case 'merge_problems': {
+      const from = findProblem(list, op.from);
+      const into = findProblem(list, op.into);
+      if (!from || !into) throw new Error(`merge_problems: unknown problem "${!from ? op.from : op.into}"`);
+      if (from === into) return;
+      into.steps.push(...from.steps);
+      const seen = new Set((into.sources || []).map((x) => x.url || x.title));
+      for (const x of from.sources || []) if (!seen.has(x.url || x.title)) (into.sources = into.sources || []).push(x);
+      logTo(into, by, `merged "${from.title}" into this problem${op.reason ? ': ' + op.reason : ''}`);
+      list.problems = list.problems.filter((p) => p !== from);
+      into.updatedAt = t;
+      changed.push({ op: 'merge', id: into.id, title: into.title, from: from.title });
+      return;
+    }
+    default:
+      throw new Error(`unknown op "${op.op}" — use upsert_problem | upsert_step | set_status | answer_step | move_step | merge_problems`);
+  }
+}
+
+function compactProblems(list) {
+  return list.problems.map((p) => ({
+    id: p.id, title: p.title, status: p.status, priority: p.priority,
+    steps: p.steps.map((s) => ({ id: s.id, title: s.title, kind: s.kind, status: s.status, priority: s.priority,
+      ...(s.kind === 'ask-user' ? { answered: !!s.answer } : {}) })),
+  }));
+}
+
+// An answered history question is a durable, confirmed fact: keep it in the person's CLAUDE.md
+// (which every session reads) so it is never re-asked. The Rounds app writes the same line format.
+function appendConfirmedHistory(slug, h) {
+  try {
+    const file = path.join(peopleDir(), slug, 'CLAUDE.md');
+    let md = '';
+    try { md = fs.readFileSync(file, 'utf8'); } catch { md = `# About ${slug}\n`; }
+    const heading = '## Confirmed history (from questions)';
+    if (!md.includes(heading)) md = md.replace(/\s*$/, '') + `\n\n${heading}\n`;
+    const line = `- ${h.date} · Q: "${String(h.question).replace(/\n/g, ' ')}" — A (user, verbatim): "${String(h.answer).replace(/\n/g, ' ')}" (step ${h.id})`;
+    if (md.includes(`(step ${h.id})`) && md.includes(String(h.answer).slice(0, 40))) return;
+    md = md.replace(/\s*$/, '') + '\n' + line + '\n';
+    fs.writeFileSync(file, md);
+  } catch (e) { log('confirmed-history append failed:', e.message); }
+}
+
+function tool_problems_get(args) {
+  const a = args || {};
+  if (!a.person) {
+    return {
+      people: listPeople().map((slug) => {
+        const l = readProblemList(slug);
+        return { person: slug, revision: l.revision || 0, problems: compactProblems(l) };
+      }),
+    };
+  }
+  checkPerson(a.person);
+  const list = readProblemList(a.person);
+  return {
+    person: a.person, revision: list.revision || 0, updatedAt: list.updatedAt || null,
+    problems: a.compact ? compactProblems(list) : list.problems,
+  };
+}
+
+function tool_problems_update(args) {
+  const a = args || {};
+  checkPerson(a.person);
+  if (!Array.isArray(a.ops) || a.ops.length === 0) throw new Error('"ops" must be a non-empty array');
+  const by = process.env.ROUNDS_CHAT_ID || 'claude';
+  return withProblemLock(a.person, () => {
+    const list = readProblemList(a.person);
+    const work = JSON.parse(JSON.stringify(list));      // all-or-nothing: apply to a copy
+    const changed = [];
+    a.ops.forEach((op, i) => {
+      try { applyProblemOp(work, op, by, changed); }
+      catch (e) { throw new Error(`op #${i + 1} (${op && op.op}): ${e.message} — nothing was saved.`); }
+    });
+    if (a.note) {
+      const touched = new Set(changed.map((c) => c.problem || c.id));
+      for (const p of work.problems) if (touched.has(p.id)) logTo(p, by, a.note);
+    }
+    if (a.markMigrated) work.migratedLegacy = true;
+    const history = work.__history || [];
+    delete work.__history;
+    sortList(work);
+    work.revision = (list.revision || 0) + 1;
+    work.updatedAt = nowIso();
+    work.updatedBy = by;
+    writeProblemList(a.person, work);
+    for (const h of history) appendConfirmedHistory(a.person, h);
+    return {
+      ok: true, person: a.person, revision: work.revision, changed,
+      problems: compactProblems(work),
+      note: 'Saved. The list above is the CURRENT state (it may include changes from other sessions) — keep the plan coherent with it.',
+    };
+  });
+}
 
 async function callTool(name, args) {
   const handler = TOOL_HANDLERS[name];

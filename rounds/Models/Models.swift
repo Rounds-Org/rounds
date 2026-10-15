@@ -16,7 +16,12 @@ nonisolated struct VaultPaths: Sendable {
     init(root: URL = VaultPaths.defaultRoot) { self.root = root }
 
     static var defaultRoot: URL {
-        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Rounds", isDirectory: true)
+        // ROUNDS_VAULT_ROOT lets a developer run a build against a copy of a vault (testing); users
+        // never set it, so the vault is always ~/Rounds.
+        if let p = ProcessInfo.processInfo.environment["ROUNDS_VAULT_ROOT"], !p.isEmpty {
+            return URL(fileURLWithPath: p, isDirectory: true)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Rounds", isDirectory: true)
     }
 
     var claudeMd: URL { root.appendingPathComponent("CLAUDE.md") }
@@ -120,7 +125,53 @@ nonisolated struct Hypothesis: Codable, Identifiable, Sendable, Hashable {
     var answer: String?           // the user's recorded answer (nil until answered)
     var answeredAt: String?       // ISO date the user answered
     var sources: [Source] = []    // the [S#] sources behind this step (shown on hover)
+    var problemId: String? = nil  // the problem this step belongs to (nil = a legacy flat card)
+    var statusReason: String? = nil
     var isQuestion: Bool { kind == HypothesisKind.askUser.rawValue }
+    var isAnswered: Bool { !(answer?.isEmpty ?? true) }
+    /// Still something to do (legacy cards used proposed/active; problem-list steps use open).
+    var isOpenStep: Bool { ["open", "proposed", "active", ""].contains(status) }
+}
+
+// MARK: - Problems (the per-person problem list: problems → next steps)
+
+/// One problem on a person's list — what is going on — with the next steps that address it. Lives in
+/// people/<slug>/problems.json, shared and edited by every Rounds session (see ProblemStore and the
+/// rounds-sources `problems_update` tool).
+nonisolated struct Problem: Identifiable, Hashable, Sendable {
+    var id: String
+    var personId: String
+    var title: String
+    var status: String          // active | watching | resolved | ruled-out
+    var priority: String        // high | medium | low
+    var summary: String
+    var sources: [Source]
+    var steps: [Hypothesis]
+    var updatedAt: String?
+    var updatedBy: String?
+
+    var isOpen: Bool { status == "active" || status == "watching" }
+    var openSteps: [Hypothesis] { steps.filter(\.isOpenStep) }
+    var closedSteps: [Hypothesis] { steps.filter { !$0.isOpenStep } }
+    var unansweredQuestions: Int { openSteps.filter { $0.isQuestion && !$0.isAnswered }.count }
+}
+
+nonisolated struct ProblemList: Hashable, Sendable {
+    var personId: String
+    var problems: [Problem]
+    var migratedLegacy: Bool
+    var revision: Int
+}
+
+/// One change a session made to the plan this turn (from the `problems_update` tool result) — shown
+/// as a compact "plan updated" card under the assistant's message.
+nonisolated struct PlanChange: Codable, Hashable, Sendable {
+    var op: String          // add_problem | update_problem | add_step | update_step | step_status | problem_status | answered | merge | move_step
+    var id: String
+    var title: String
+    var status: String?
+    var person: String
+    var stableId: String { "\(person)|\(op)|\(id)" }
 }
 
 // MARK: - Sources (right panel)
@@ -152,7 +203,8 @@ nonisolated struct ChatMessage: Codable, Identifiable, Sendable, Hashable {
     var text: String
     var timestamp: Date
     var references: [Reference] = []   // @-mentions attached to a user message (shown as chips)
-    var hypotheses: [Hypothesis] = []  // next steps this assistant turn created/changed (inline cards)
+    var hypotheses: [Hypothesis] = []  // legacy: next steps this assistant turn created (inline cards)
+    var planChanges: [PlanChange] = [] // problem-list changes this assistant turn made (inline card)
     var phases: [PipelinePhase] = []   // the multi-step pipeline that produced this turn (timeline above it)
 }
 
@@ -226,12 +278,15 @@ nonisolated struct PlanQuestion: Sendable, Hashable {
 
 /// An @-mention reference the user inserted in the input (file, person, step, or chat).
 nonisolated struct Reference: Identifiable, Hashable, Sendable, Codable {
-    enum Kind: String, Sendable, Codable { case file, person, step, chat }
+    enum Kind: String, Sendable, Codable { case file, person, step, chat, problem }
     var kind: Kind
     var id: String      // relativePath / slug / hypothesis id / chat id
     var label: String
     var iconName: String {
-        switch kind { case .file: "doc.text"; case .person: "person"; case .step: "checklist"; case .chat: "bubble.left" }
+        switch kind {
+        case .file: "doc.text"; case .person: "person"; case .step: "checklist"; case .chat: "bubble.left"
+        case .problem: "stethoscope"
+        }
     }
 }
 

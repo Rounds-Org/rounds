@@ -13,162 +13,78 @@ import CoreImage
 
 struct ChatView: View {
     @Environment(AppState.self) private var app
-    @State private var atBottom = true   // only magnet-scroll when the user is already at the bottom
 
-    // The unsent draft + @-references live on the per-chat ChatRuntime (not local @State), so they
-    // survive leaving the tab and coming back, and stay distinct per chat.
-    private func draftBinding(_ rt: ChatRuntime) -> Binding<String> {
-        Binding(get: { rt.draft }, set: { rt.draft = $0 })
+    var body: some View {
+        // One screen per chat (keyed by id): switching chats builds a fresh screen instead of diffing
+        // one chat's transcript into another's, and every subview observes ONLY the runtime it shows.
+        if let id = app.activeChatTab, let rt = app.chatRuntimes[id] {
+            ChatScreen(rt: rt).id(rt.id)
+        } else {
+            Theme.bg
+        }
     }
-    private func refsBinding(_ rt: ChatRuntime) -> Binding<[Reference]> {
-        Binding(get: { rt.draftReferences }, set: { rt.draftReferences = $0 })
-    }
+}
+
+/// The open chat. Split into small views that each observe just what they draw, so a streaming
+/// token re-renders the live answer — not the whole transcript, the header and the input bar.
+private struct ChatScreen: View {
+    let rt: ChatRuntime
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if let rt = app.activeRuntime, rt.remoteControlOn { remoteBar(rt) }
+            ChatHeader(rt: rt)
+            if rt.remoteControlOn { RemoteBar(rt: rt) }
             Divider()
-            transcript
-            inputBar
+            ChatTranscript(rt: rt)
+            ChatInputBar(rt: rt)
         }
         .background(Theme.bg)
-        .onAppear(perform: pickupPending)
-        .onChange(of: app.activeChatId) { _, _ in pickupPending() }
     }
+}
 
-    private func pickupPending() {
-        guard let rt = app.activeRuntime else { return }
-        if !app.pendingChatDraft.isEmpty || !app.pendingReferences.isEmpty {
-            rt.draft = app.pendingChatDraft
-            rt.draftReferences = app.pendingReferences
-            app.pendingChatDraft = ""
-            app.pendingReferences = []
-        }
-    }
+private struct ChatHeader: View {
+    @Environment(AppState.self) private var app
+    let rt: ChatRuntime
 
-    @ViewBuilder private var inputBar: some View {
-        if let rt = app.activeRuntime {
-            VStack(alignment: .leading, spacing: 6) {
-                if !rt.draftReferences.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .bottom, spacing: 8) {
-                            ForEach(rt.draftReferences) { ref in
-                                RefAttachment(ref: ref, compact: true) { rt.draftReferences.removeAll { $0 == ref } }
-                            }
-                        }
-                        .padding(.top, 6).padding(.trailing, 6)
-                    }
-                }
-                if !rt.queued.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Queued — sends after this reply").zfont(.caption2).foregroundStyle(.secondary)
-                        ForEach(rt.queued) { q in
-                            HStack(alignment: .top, spacing: 6) {
-                                Image(systemName: "clock").zfont(.caption2).foregroundStyle(.secondary)
-                                Text(q.text).zfont(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Button { rt.queued.removeAll { $0.id == q.id } } label: { Image(systemName: "xmark").zfont(size: 9) }
-                                    .buttonStyle(.borderless).foregroundStyle(.secondary)
-                                    .help("Remove from queue")
-                            }
-                            .padding(.horizontal, 9).padding(.vertical, 6)
-                            .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
-                        }
-                    }
-                }
-                MentionField(text: draftBinding(rt), references: refsBinding(rt),
-                             placeholder: "Ask a follow-up…  (type @ to reference a file, person, step, or chat)",
-                             onSend: send, autofocus: true,
-                             onRegisterTextView: { rt.inputTextView = $0 })
-                HStack(spacing: 10) {
-                    InputControls()
-                    Divider().frame(height: 12)
-                    ResearchStagePicker(stage: Binding(get: { rt.researchStage }, set: { rt.researchStage = $0 }))
-                    Spacer()
-                    VoiceInputButton()
-                    attachMenu
-                }
-                .foregroundStyle(.primary)
-            }
-            .padding(12)
-            .background(Theme.panel)
-            .overlay(Divider(), alignment: .top)
-        }
-    }
-
-    private func send() {
-        guard let rt = app.activeRuntime else { return }
-        let text = rt.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }   // mid-stream is fine now — ChatRuntime queues it
-        let refs = rt.draftReferences
-        rt.draft = ""
-        rt.draftReferences = []
-        app.beginSendChat(text, references: refs)
-    }
-
-    // Paperclip: first choose the destination (this chat vs. Rounds' general filing), then pick files.
-    private var attachMenu: some View {
-        Menu {
-            Button { pickAndAttach(toChat: true) } label: { Label("Add to this chat", systemImage: "bubble.left") }
-            Button { pickAndAttach(toChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
-        } label: {
-            Image(systemName: "paperclip").zfont(.body, .medium).foregroundStyle(.primary)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Attach a document — to this chat, or to Rounds for filing")
-    }
-
-    private func pickAndAttach(toChat: Bool) {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.prompt = "Attach"
-        panel.message = toChat ? "Add document(s) to this chat" : "Add document(s) to Rounds"
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        if toChat, let cid = app.activeChatTab { app.attachFilesToChat(panel.urls, chatId: cid) }
-        else { app.beginImport(panel.urls) }
-    }
-
-    private var header: some View {
+    var body: some View {
         HStack {
             Button { app.selectHome() } label: {
                 Label("Home", systemImage: "chevron.left")
             }.buttonStyle(.borderless)
             Spacer()
-            if app.isStreaming {
+            if rt.isStreaming {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    if !app.statusLine.isEmpty {
-                        Text(app.statusLine).zfont(.caption).foregroundStyle(.secondary)
+                    if !rt.statusLine.isEmpty {
+                        Text(rt.statusLine).zfont(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Button { app.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                    Button { rt.stop() } label: { Label("Stop", systemImage: "stop.fill") }
                         .buttonStyle(.borderless).zfont(.caption).tint(Theme.warn)
                 }
             }
             Spacer()
-            if let rt = app.activeRuntime {
-                Button { rt.setRemoteControl(!rt.remoteControlOn) } label: {
-                    Label(rt.remoteControlOn ? "On your phone" : "Remote control",
-                          systemImage: rt.remoteControlOn ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                        .zfont(.caption)
-                }
-                .buttonStyle(.borderless)
-                .tint(rt.remoteControlOn ? Theme.accent : .secondary)
-                .help("Continue this chat on your phone. Turns it into a Claude Code Remote Control session — open the link / scan the QR on your phone, or find it in the Claude app.")
+            Button { rt.setRemoteControl(!rt.remoteControlOn) } label: {
+                Label(rt.remoteControlOn ? "On your phone" : "Remote control",
+                      systemImage: rt.remoteControlOn ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                    .zfont(.caption)
             }
+            .buttonStyle(.borderless)
+            .tint(rt.remoteControlOn ? Theme.accent : .secondary)
+            .help("Continue this chat on your phone. Turns it into a Claude Code Remote Control session — open the link / scan the QR on your phone, or find it in the Claude app.")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
+}
 
-    /// Shown when remote control is on: the pairing URL + a QR to scan with a phone. Messages typed
-    /// on the phone appear in this same transcript; you can keep typing here too.
-    private func remoteBar(_ rt: ChatRuntime) -> some View {
+/// Shown when remote control is on: the pairing URL + a QR to scan with a phone. Messages typed
+/// on the phone appear in this same transcript; you can keep typing here too.
+private struct RemoteBar: View {
+    @Environment(AppState.self) private var app
+    let rt: ChatRuntime
+
+    var body: some View {
         HStack(spacing: 12) {
-            if let url = rt.remoteSessionURL, let qr = Self.qrImage(url) {
+            if let url = rt.remoteSessionURL, let qr = ChatView.qrImage(url) {
                 Image(nsImage: qr).interpolation(.none).resizable().frame(width: 54, height: 54)
                     .background(.white).cornerRadius(4)
             } else {
@@ -195,7 +111,9 @@ struct ChatView: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Theme.accentSoft)
     }
+}
 
+extension ChatView {
     static func qrImage(_ string: String) -> NSImage? {
         guard let data = string.data(using: .utf8),
               let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
@@ -205,63 +123,203 @@ struct ChatView: View {
         let rep = NSCIImageRep(ciImage: ci)
         let img = NSImage(size: rep.size); img.addRepresentation(rep); return img
     }
+}
 
-    private var transcript: some View {
+private struct ChatInputBar: View {
+    @Environment(AppState.self) private var app
+    let rt: ChatRuntime
+
+    // The unsent draft + @-references live on the per-chat ChatRuntime (not local @State), so they
+    // survive leaving the tab and coming back, and stay distinct per chat.
+    private var draft: Binding<String> { Binding(get: { rt.draft }, set: { rt.draft = $0 }) }
+    private var refs: Binding<[Reference]> { Binding(get: { rt.draftReferences }, set: { rt.draftReferences = $0 }) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !rt.draftReferences.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        ForEach(rt.draftReferences) { ref in
+                            RefAttachment(ref: ref, compact: true) { rt.draftReferences.removeAll { $0 == ref } }
+                        }
+                    }
+                    .padding(.top, 6).padding(.trailing, 6)
+                }
+            }
+            if !rt.queued.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Queued — sends after this reply").zfont(.caption2).foregroundStyle(.secondary)
+                    ForEach(rt.queued) { q in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "clock").zfont(.caption2).foregroundStyle(.secondary)
+                            Text(q.text).zfont(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button { rt.queued.removeAll { $0.id == q.id } } label: { Image(systemName: "xmark").zfont(size: 9) }
+                                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                                .help("Remove from queue")
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 6)
+                        .background(Theme.bg, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
+                    }
+                }
+            }
+            MentionField(text: draft, references: refs,
+                         placeholder: "Ask a follow-up…  (type @ to reference a file, person, problem, or chat)",
+                         onSend: send, autofocus: true,
+                         onRegisterTextView: { rt.inputTextView = $0 })
+            HStack(spacing: 10) {
+                InputControls()
+                Divider().frame(height: 12)
+                ResearchStagePicker(stage: Binding(get: { rt.researchStage }, set: { rt.researchStage = $0 }))
+                Spacer()
+                VoiceInputButton()
+                attachMenu
+            }
+            .foregroundStyle(.primary)
+        }
+        .padding(12)
+        .background(Theme.panel)
+        .overlay(Divider(), alignment: .top)
+    }
+
+    private func send() {
+        let text = rt.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }   // mid-stream is fine now — ChatRuntime queues it
+        let refs = rt.draftReferences
+        rt.draft = ""
+        rt.draftReferences = []
+        rt.send(text, references: refs)
+    }
+
+    // Paperclip: first choose the destination (this chat vs. Rounds' general filing), then pick files.
+    private var attachMenu: some View {
+        Menu {
+            Button { pickAndAttach(toChat: true) } label: { Label("Add to this chat", systemImage: "bubble.left") }
+            Button { pickAndAttach(toChat: false) } label: { Label("Add to Rounds (read & file)", systemImage: "tray.and.arrow.down") }
+        } label: {
+            Image(systemName: "paperclip").zfont(.body, .medium).foregroundStyle(.primary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Attach a document — to this chat, or to Rounds for filing")
+    }
+
+    private func pickAndAttach(toChat: Bool) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Attach"
+        panel.message = toChat ? "Add document(s) to this chat" : "Add document(s) to Rounds"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        if toChat { app.attachFilesToChat(panel.urls, chatId: rt.id) }
+        else { app.beginImport(panel.urls) }
+    }
+}
+
+/// The scrolling transcript. Messages sit in a LazyVStack (only what's on screen is laid out — a
+/// long chat no longer typesets every past answer on open), each row is Equatable so a parent
+/// re-render skips unchanged rows, and the live turn is its own view so streaming tokens touch
+/// nothing else.
+private struct ChatTranscript: View {
+    let rt: ChatRuntime
+    @State private var atBottom = true   // only magnet-scroll when the user is already at the bottom
+
+    var body: some View {
         GeometryReader { outer in
-        ScrollViewReader { proxy in
-            ScrollView {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let alert = rt.alert { AlertBanner(alert: alert) }
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            ForEach(rt.messages) { msg in
+                                MessageRow(message: msg, chatId: rt.id).equatable()
+                            }
+                        }
+                        LiveTurn(rt: rt, proxy: proxy, follow: atBottom)
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(GeometryReader { b in
+                                Color.clear.preference(key: AtBottomKey.self,
+                                    value: b.frame(in: .global).maxY <= outer.frame(in: .global).maxY + 60)
+                            })
+                    }
+                    .padding(20)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
+                .onPreferenceChange(AtBottomKey.self) { v in Task { @MainActor in if atBottom != v { atBottom = v } } }
+                .onChange(of: rt.messages.count) { _, _ in if atBottom { withAnimation { proxy.scrollTo("bottom") } } }
+                .onAppear { proxy.scrollTo("bottom") }
+                .overlay(alignment: .bottomTrailing) {
+                    if !atBottom {
+                        Button {
+                            withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                            atBottom = true
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .zfont(size: 13, weight: .semibold).foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.accent, in: Circle())
+                                .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 18).padding(.bottom, 12)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.15), value: atBottom)
+            }
+        }
+    }
+}
+
+/// The in-flight turn: phase timeline / tool trace + the streaming answer. Observes only the live
+/// fields, and keeps the view pinned to the bottom while the user is there (sticky-bottom only).
+private struct LiveTurn: View {
+    let rt: ChatRuntime
+    let proxy: ScrollViewProxy
+    let follow: Bool
+
+    var body: some View {
+        Group {
+            if rt.isStreaming {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let alert = app.currentAlert { AlertBanner(alert: alert) }
-
-                    ForEach(app.messages) { msg in
-                        MessageRow(message: msg)
+                    // A multi-step pipeline shows the green phase timeline; a plain turn keeps the
+                    // simple tool trace. (Phases fall back to the trace until the first one lands.)
+                    if !rt.phases.isEmpty {
+                        PhaseTimeline(phases: rt.phases, live: true)
+                    } else {
+                        ResearchTrace(steps: rt.trace, statusLine: rt.statusLine, tokens: rt.liveTokens)
                     }
-
-                    if app.isStreaming {
-                        // A multi-step pipeline shows the green phase timeline; a plain turn keeps the
-                        // simple tool trace. (Phases fall back to the trace until the first one lands.)
-                        if !app.currentPhases.isEmpty {
-                            PhaseTimeline(phases: app.currentPhases, live: true)
-                        } else {
-                            ResearchTrace(steps: app.currentTrace, statusLine: app.statusLine, tokens: app.currentTokens)
-                        }
-                        if !app.liveText.isEmpty {
-                            MessageRow(message: ChatMessage(id: "live", role: .assistant, text: app.liveText + " ▍", timestamp: Date()))
-                        }
+                    if !rt.liveText.isEmpty {
+                        LiveAnswer(text: rt.liveText)
                     }
-                    Color.clear.frame(height: 1).id("bottom")
-                        .background(GeometryReader { b in
-                            Color.clear.preference(key: AtBottomKey.self,
-                                value: b.frame(in: .global).maxY <= outer.frame(in: .global).maxY + 60)
-                        })
-                }
-                .padding(20)
-                .frame(maxWidth: 760, alignment: .leading)
-                .frame(maxWidth: .infinity)
-            }
-            .onPreferenceChange(AtBottomKey.self) { v in Task { @MainActor in atBottom = v } }
-            .onChange(of: app.messages.count) { _, _ in if atBottom { withAnimation { proxy.scrollTo("bottom") } } }
-            .onChange(of: app.liveText) { _, _ in if atBottom { proxy.scrollTo("bottom") } }
-            .overlay(alignment: .bottomTrailing) {
-                if !atBottom {
-                    Button {
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                        atBottom = true
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .zfont(size: 13, weight: .semibold).foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(Theme.accent, in: Circle())
-                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 18).padding(.bottom, 12)
-                    .transition(.scale.combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: atBottom)
         }
-        }
+        .onChange(of: rt.liveText) { _, _ in if follow { proxy.scrollTo("bottom") } }
+    }
+}
+
+/// The streaming answer. Completed paragraphs are parsed once (cached); only the growing tail is
+/// re-parsed per tick.
+private struct LiveAnswer: View {
+    @Environment(\.zoomScale) private var zoom
+    let text: String
+
+    var body: some View {
+        let split = text.range(of: "\n\n", options: .backwards)
+        let head = split.map { String(text[..<$0.lowerBound]) } ?? ""
+        let tail = split.map { String(text[$0.upperBound...]) } ?? text
+        var attr = head.isEmpty ? AttributedString("") : MarkdownText.cachedAttributed(head, scale: zoom)
+        if !head.isEmpty { attr += AttributedString("\n\n") }
+        attr += MarkdownText.fullAttributed(tail, scale: zoom)
+        attr += AttributedString(" ▍")
+        return Text(attr)
+            .zfont(.body)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -270,10 +328,13 @@ private struct AtBottomKey: PreferenceKey {
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = nextValue() }
 }
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     @Environment(AppState.self) private var app
     @Environment(\.zoomScale) private var zoom
     let message: ChatMessage
+    var chatId: String? = nil
+
+    static func == (l: MessageRow, r: MessageRow) -> Bool { l.message == r.message && l.chatId == r.chatId }
 
     var body: some View {
         switch message.role {
@@ -309,11 +370,12 @@ struct MessageRow: View {
                 }
                 // Table-free messages render as ONE selectable Text so the user can drag-select
                 // across paragraphs and copy. Table messages keep the grid renderer (per-block).
+                // The parsed AttributedString is cached by content, so a re-render never re-parses.
                 Group {
-                    if MarkdownText.hasTable(message.text) {
+                    if MarkdownText.cachedHasTable(message.text) {
                         MarkdownText(message.text)
                     } else {
-                        Text(MarkdownText.fullAttributed(message.text, scale: zoom))
+                        Text(MarkdownText.cachedAttributed(message.text, scale: zoom))
                             .zfont(.body)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -321,13 +383,16 @@ struct MessageRow: View {
                 }
                     .contextMenu {
                         Button("Explain in a new chat") {
-                            app.explainInNewChat(message.text, fromChat: app.activeChatId)
+                            app.explainInNewChat(message.text, fromChat: chatId)
                         }
                         Button("Copy") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(message.text, forType: .string)
                         }
                     }
+                if !message.planChanges.isEmpty {
+                    PlanChangesCard(changes: message.planChanges).padding(.top, 2)
+                }
                 if !message.hypotheses.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(message.hypotheses.count == 1 ? "Added to your next steps" : "Added \(message.hypotheses.count) next steps",
@@ -520,7 +585,7 @@ struct ResearchTrace: View {
             Button { withAnimation { expanded.toggle() } } label: {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.mini)
-                    Text((expanded ? "Working · \(steps.count) step\(steps.count == 1 ? "" : "s")" : current) + tokenLabel)
+                    Text((expanded && !steps.isEmpty ? "Working · \(steps.count) step\(steps.count == 1 ? "" : "s")" : current) + tokenLabel)
                         .zfont(.caption, .medium).foregroundStyle(.secondary).lineLimit(1)
                         .monospacedDigit()
                     Spacer(minLength: 4)
@@ -575,9 +640,10 @@ struct AlertBanner: View {
 
 /// Block-based markdown renderer: paragraphs, bold/italics, bullet & numbered lists,
 /// headings, and GitHub-style tables.
-struct MarkdownText: View {
+struct MarkdownText: View, Equatable {
     let raw: String
     init(_ raw: String) { self.raw = raw }
+    static func == (l: MarkdownText, r: MarkdownText) -> Bool { l.raw == r.raw }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -752,8 +818,37 @@ struct MarkdownText: View {
             ?? AttributedString(renumbered)
     }
 
+    private static let citationRegex = try? NSRegularExpression(pattern: "\\[S(\\d+)\\]")
+
     static func renumberCitations(_ s: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: "\\[S(\\d+)\\]") else { return s }
+        guard s.contains("[S"), let re = citationRegex else { return s }
         return re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "[$1]")
+    }
+
+    // MARK: render cache
+    //
+    // Parsing markdown into an AttributedString is the expensive part of drawing a message (and it
+    // used to run for EVERY message on EVERY re-render). Results are cached by content + zoom so a
+    // message is parsed once; the cache is bounded and simply resets when it grows too large.
+
+    private struct CacheKey: Hashable { let text: String; let scale: CGFloat }
+    @MainActor private static var attributedCache: [CacheKey: AttributedString] = [:]
+    @MainActor private static var tableCache: [String: Bool] = [:]
+
+    @MainActor static func cachedAttributed(_ raw: String, scale: CGFloat = 1) -> AttributedString {
+        let key = CacheKey(text: raw, scale: scale)
+        if let hit = attributedCache[key] { return hit }
+        if attributedCache.count > 600 { attributedCache.removeAll(keepingCapacity: true) }
+        let value = fullAttributed(raw, scale: scale)
+        attributedCache[key] = value
+        return value
+    }
+
+    @MainActor static func cachedHasTable(_ raw: String) -> Bool {
+        if let hit = tableCache[raw] { return hit }
+        if tableCache.count > 1200 { tableCache.removeAll(keepingCapacity: true) }
+        let value = hasTable(raw)
+        tableCache[raw] = value
+        return value
     }
 }

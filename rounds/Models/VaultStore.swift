@@ -15,6 +15,7 @@ nonisolated struct VaultSnapshot: Sendable {
     var hypotheses: [Hypothesis] = []
     var chats: [ChatSummary] = []
     var displayName: String = ""
+    var problemLists: [ProblemList] = []
 }
 
 nonisolated enum VaultStore {
@@ -25,6 +26,7 @@ nonisolated enum VaultStore {
         snap.people = loadPeople(vault)
         snap.documents = loadDocuments(vault, people: snap.people)
         snap.hypotheses = loadHypotheses(vault)
+        snap.problemLists = ProblemStore.loadAll(vault, people: snap.people)
         snap.chats = loadChats(vault)
         return snap
     }
@@ -345,23 +347,7 @@ nonisolated enum VaultStore {
         }()
         let askPlaceholder = (obj["ask"] as? [String: Any])?["placeholder"] as? String
             ?? obj["askPlaceholder"] as? String
-        let sources: [Source] = (obj["sources"] as? [[String: Any]] ?? []).map { s in
-            let doi = s["doi"] as? String
-            let pmid = (s["pmid"] as? String) ?? (s["pmid"] as? NSNumber).map { "\($0)" }
-            let url = (s["url"] as? String)
-                ?? doi.map { "https://doi.org/\($0)" }
-                ?? pmid.map { "https://pubmed.ncbi.nlm.nih.gov/\($0)/" }
-            return Source(
-                id: (s["id"] as? String) ?? "S?",
-                title: (s["ref"] as? String) ?? (s["citation"] as? String) ?? (s["title"] as? String) ?? "Source",
-                url: url,
-                type: s["type"] as? String,
-                trustTier: (s["tier"] as? String) ?? (s["trustTier"] as? String) ?? "—",
-                year: (s["year"] as? Int) ?? (s["year"] as? NSNumber)?.intValue,
-                journal: s["journal"] as? String,
-                citedBy: (s["citedBy"] as? Int) ?? (s["citedBy"] as? NSNumber)?.intValue,
-                whyTrusted: s["whyTrusted"] as? String)
-        }
+        let sources = parseSourceList(obj["sources"])
         return Hypothesis(
             id: (obj["id"] as? String) ?? UUID().uuidString,
             title: (obj["title"] as? String) ?? "Next step",
@@ -378,6 +364,29 @@ nonisolated enum VaultStore {
             answer: obj["answer"] as? String,
             answeredAt: (obj["answeredAt"] as? String) ?? (obj["answered_at"] as? String),
             sources: sources)
+    }
+
+    /// Tolerant source-list parsing (the brain writes tier/trustTier, ref/citation/title, doi/pmid/url).
+    static func parseSourceList(_ any: Any?) -> [Source] {
+        (any as? [[String: Any]] ?? []).map { s in
+            let doi = s["doi"] as? String
+            let pmid = (s["pmid"] as? String) ?? (s["pmid"] as? NSNumber).map { "\($0)" }
+            let url = (s["url"] as? String)
+                ?? doi.map { "https://doi.org/\($0)" }
+                ?? pmid.map { "https://pubmed.ncbi.nlm.nih.gov/\($0)/" }
+            return Source(
+                id: (s["id"] as? String) ?? "S?",
+                title: (s["ref"] as? String) ?? (s["citation"] as? String) ?? (s["title"] as? String) ?? "Source",
+                url: url,
+                type: s["type"] as? String,
+                trustTier: (s["tier"] as? String) ?? (s["trustTier"] as? String) ?? "—",
+                year: (s["year"] as? Int) ?? (s["year"] as? NSNumber)?.intValue,
+                journal: s["journal"] as? String,
+                citedBy: (s["citedBy"] as? Int) ?? (s["citedBy"] as? NSNumber)?.intValue,
+                whyTrusted: s["whyTrusted"] as? String,
+                maturity: s["maturity"] as? String,
+                caution: s["caution"] as? String)
+        }
     }
 
     static func priorityRank(_ p: String) -> Int {
@@ -418,7 +427,11 @@ nonisolated enum VaultStore {
     /// Parse the chat's front-matter (title + the Claude sessionId used for --resume). Without the
     /// sessionId a reopened chat starts blank; with it the warm session resumes full memory.
     private static func frontMatter(in url: URL) -> (title: String?, sessionId: String?, researchStage: RoundsResearchStage?) {
-        guard let s = try? String(contentsOf: url, encoding: .utf8) else { return (nil, nil, nil) }
+        // Only the head of the file holds the front-matter — don't read a 100 KB transcript for it.
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return (nil, nil, nil) }
+        defer { try? fh.close() }
+        guard let data = try? fh.read(upToCount: 2048) else { return (nil, nil, nil) }
+        let s = String(decoding: data, as: UTF8.self)
         var title: String?, sid: String?, stage: RoundsResearchStage?
         for line in s.split(separator: "\n").prefix(8) {
             let t = line.trimmingCharacters(in: .whitespaces)

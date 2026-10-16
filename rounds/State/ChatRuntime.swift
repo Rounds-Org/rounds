@@ -318,6 +318,7 @@ final class ChatRuntime: Identifiable {
         turnPlanChanges = []
         beginPipeline()   // a chat turn is its own mini-pipeline; the brain's <phase> markers fill it in
 
+        await app.toolsReady()
         ensureWarm()
         let stage = researchStage
         let firstTurn = (warm?.turnCount ?? 0) == 0

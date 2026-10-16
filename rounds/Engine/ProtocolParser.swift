@@ -134,6 +134,9 @@ nonisolated enum ProtocolParser {
     /// Remove closed `<phase>…</phase>` markers (and a trailing unclosed `<phase…` fragment) so the
     /// markers never appear in the visible answer — they only feed the timeline.
     static func stripPhaseMarkers(_ s: String) -> String {
+        // Fast path: almost every message has no marker at all — skip three whole-text regex passes
+        // (this runs for every message of every chat when the search index is built at launch).
+        guard s.range(of: "<phase", options: .caseInsensitive) != nil else { return s }
         var out = s
         if let re = phaseRegex {
             out = re.stringByReplacingMatches(in: out, range: NSRange(location: 0, length: (out as NSString).length), withTemplate: "")

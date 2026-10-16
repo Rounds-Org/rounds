@@ -214,6 +214,7 @@ Next steps are not a flat pile of cards any more. Each person has `people/<slug>
 - Streaming deltas are coalesced (~14 updates/s) in `ChatRuntime.consume`; don't re-derive `liveText` per token.
 - No vault scans on the main thread: `reload()` loads off-main and applies only changed collections; `persistChat` upserts one `ChatSummary` instead of rescanning `chats/`; chat front-matter reads only the first 2 KB.
 - `AppState.activeRuntime` must stay a non-mutating lookup (views call it).
+- Launch must NOT wait on the tool check. `bootstrap()` shows Home from the tools cached last launch (`ToolLocator.cached()`, validated by file existence) and the vault; `checkTools()` runs the login-shell probe in the background (one `zsh -lic` for PATH, then `claude --version` / `auth status` run DIRECTLY — each extra login shell cost ~1 s), then installs the brain and starts the legacy migration. Sends/imports call `toolsReady()` so a message in the first second of a first-ever launch waits instead of failing. Launch-to-Home went 3.5 s → 0.6 s (median); `NSLog` "Rounds launch: …" lines measure it.
 
 ## Model list is LIVE from Claude Code — never hardcode model names/versions
 

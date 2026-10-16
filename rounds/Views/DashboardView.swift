@@ -23,7 +23,8 @@ struct DashboardView: View {
                 if let alert = app.urgentBanner { UrgentBanner(alert: alert).padding(.bottom, 22) }
                 header.padding(.bottom, 22)
                 askBox.padding(.bottom, 22)
-                if !app.checklistComplete { checklistCard.padding(.bottom, 22) }
+                // Only once this launch's tool check is done — not while the cached state is being confirmed.
+                if app.toolsChecked, !app.checklistComplete { checklistCard.padding(.bottom, 22) }
                 if app.checklistComplete, !starterDone { gettingStartedCard.padding(.bottom, 22) }
 
                 PlanSection(filter: $planFilter)

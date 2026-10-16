@@ -50,7 +50,7 @@ struct ContentView: View {
 
     private var scaledContent: some View {
         Group {
-            if app.booted { mainView } else { BootSkeleton() }
+            if app.booted { mainView.onAppear { AppLaunch.mark("home on screen") } } else { BootSkeleton() }
         }
         .overlay { dropOverlay }
         .overlay(alignment: .bottom) { ToastBanner() }

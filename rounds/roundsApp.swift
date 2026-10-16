@@ -6,12 +6,31 @@
 //
 
 import SwiftUI
+import Darwin
+
+/// Launch timing, measured from the PROCESS start (not App.init), logged once to the unified log
+/// (`log stream --predicate 'eventMessage CONTAINS "Rounds launch"'`) so a launch regression is visible.
+enum AppLaunch {
+    static let processStart: Date = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date() }
+        let tv = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(tv.tv_sec) + Double(tv.tv_usec) / 1_000_000)
+    }()
+    @MainActor private static var marked: Set<String> = []
+    @MainActor static func mark(_ what: String) {
+        guard marked.insert(what).inserted else { return }
+        NSLog("Rounds launch: %@ at %.0f ms", what, Date().timeIntervalSince(processStart) * 1000)
+    }
+}
 
 @main
 struct roundsApp: App {
     @State private var app = AppState()
 
-    init() { HandFont.register() }
+    init() { _ = AppLaunch.processStart; HandFont.register() }
 
     var body: some Scene {
         WindowGroup {

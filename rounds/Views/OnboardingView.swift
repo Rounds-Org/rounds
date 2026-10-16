@@ -254,7 +254,7 @@ struct OnboardingView: View {
                 }
 
                 ChecklistRow(done: app.toolPaths.claudeInstalled, title: "Claude Code",
-                             detail: app.toolPaths.claude ?? "Not found — install from claude.com/code",
+                             detail: app.toolPaths.claude ?? (app.toolsChecked ? "Not found — install from claude.com/code" : "Looking for it on your Mac…"),
                              link: app.toolPaths.claudeInstalled ? nil : "https://claude.com/code")
                 // Installed ≠ signed in. Shown only when we have a definite answer from `claude auth status`.
                 if app.toolPaths.claudeInstalled, let signedIn = app.toolPaths.loggedIn {
@@ -263,7 +263,7 @@ struct OnboardingView: View {
                                     : "Not signed in — open Terminal, run “claude”, sign in, then press Re-check")
                 }
                 ChecklistRow(done: app.toolPaths.nodeInstalled, title: "Node.js",
-                             detail: app.toolPaths.node ?? "Not found — install from nodejs.org",
+                             detail: app.toolPaths.node ?? (app.toolsChecked ? "Not found — install from nodejs.org" : "Looking for it on your Mac…"),
                              link: app.toolPaths.nodeInstalled ? nil : "https://nodejs.org")
                 ChecklistRow(done: app.brainInstalled, title: "Rounds brain",
                              detail: app.brainInstalled ? "Installed in ~/Rounds" : "Installs automatically once the tools above are found")

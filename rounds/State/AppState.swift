@@ -396,25 +396,30 @@ final class AppState {
         analyticsOptOut = VaultStore.readString("analyticsOptOut", vault) == "1"
         Analytics.configure(optedOut: analyticsOptOut, deviceId: Analytics.loadOrCreateDeviceId(vault))
         Analytics.track(.appOpened)
-        toolPaths = await ToolLocator.locate()
-        Analytics.track(.toolCheck(tool: "claude", ok: toolPaths.claudeInstalled))
-        Analytics.track(.toolCheck(tool: "node", ok: toolPaths.nodeInstalled))
-        if toolPaths.claudeInstalled && toolPaths.nodeInstalled {
-            do {
-                try BrainInstaller.installIfNeeded(vault, toolPaths: toolPaths)
-                brainInstalled = true
-            } catch { toast = "Brain install failed: \(error.localizedDescription)" }
-        } else {
-            // Still scaffold the vault so the UI has somewhere to live.
-            try? vault.ensureScaffold()
-        }
+
+        // Show the app FIRST. Finding Claude Code / Node means running the user's login shell
+        // (their .zshrc, nvm…), which took 3–5 s and used to hold the whole window on a skeleton.
+        // Instead: start from the tools found last launch (if they're still there) so chats work
+        // immediately, and re-check in the background (`checkTools`).
         let v = vault
-        await Task.detached(priority: .userInitiated) { VaultStore.reconcileAllStaged(v) }.value   // repair filed-but-stranded raws
+        let cached = ToolLocator.cached()
+        if let cached {
+            toolPaths = cached
+            if cached.claudeInstalled && cached.nodeInstalled {
+                // Installing/updating the brain is plain file writes (needs only the node path).
+                brainInstalled = await Task.detached(priority: .userInitiated) {
+                    (try? BrainInstaller.installIfNeeded(v, toolPaths: cached)) != nil
+                }.value
+            }
+        }
+        await Task.detached(priority: .userInitiated) {
+            try? v.ensureScaffold()                  // so the UI has somewhere to live even before tools are found
+            VaultStore.reconcileAllStaged(v)         // repair filed-but-stranded raws
+        }.value
         await reloadAsync()
         if let raw = VaultStore.readString("model", vault), !raw.isEmpty {
             selectedModel = RoundsModel(rawValue: raw)
         }
-        Task { await refreshModels(force: true) }
         if let raw = VaultStore.readString("effort", vault), let e = RoundsEffort(rawValue: raw) {
             selectedEffort = e
         }
@@ -432,6 +437,48 @@ final class AppState {
         setUpUpdater()   // wire Sparkle's auto-updater to the banner + start background checks
         showWhatsNewIfUpdated()
         startProblemWatcher()
+        Task { await checkTools(initial: true) }
+    }
+
+    /// Wait (briefly) for the launch tool check when there was no cache to start from — so a message
+    /// sent in the first second after the very first launch doesn't fail with "Claude Code not found".
+    func toolsReady() async {
+        var waited = 0
+        while toolPaths.claude == nil, !toolsChecked, waited < 300 {
+            try? await Task.sleep(for: .milliseconds(100)); waited += 1
+        }
+    }
+
+    /// True once this launch's real tool check has finished (until then `toolPaths` may come from the
+    /// launch cache) — so setup prompts don't flash "Claude Code not found" while it's still checking.
+    var toolsChecked = false
+
+    /// The real probe: login-shell PATH + Claude Code version + sign-in state. Updates `toolPaths`,
+    /// installs/updates the brain, and — on the launch pass — starts the work that needs confirmed tools.
+    func checkTools(initial: Bool = false) async {
+        let found = await ToolLocator.locate()
+        let changed = found != toolPaths
+        if changed { toolPaths = found }
+        ToolLocator.save(found)
+        if initial {
+            Analytics.track(.toolCheck(tool: "claude", ok: found.claudeInstalled))
+            Analytics.track(.toolCheck(tool: "node", ok: found.nodeInstalled))
+        }
+        if found.claudeInstalled && found.nodeInstalled {
+            let v = vault
+            do {
+                try await Task.detached(priority: .userInitiated) { try BrainInstaller.installIfNeeded(v, toolPaths: found) }.value
+                brainInstalled = true
+            } catch { toast = "Brain install failed: \(error.localizedDescription)" }
+        }
+        if changed {
+            writeEffectiveSettings()
+            chatRuntimes.values.filter { !$0.isStreaming }.forEach { $0.modelChanged() }   // new PATH / flags → fresh processes next turn
+        }
+        toolsChecked = true
+        guard initial else { return }
+        AppLaunch.mark("tools checked")
+        Task { await refreshModels(force: true) }
         migrateLegacyIfNeeded()
         // Developer hook (never set for users): ROUNDS_DEV_IMPORT="/path/a.pdf:/path/b.jpg" files those
         // documents on launch — lets the filing → plan-update flow be tested without the file picker.
@@ -482,12 +529,9 @@ final class AppState {
 
     func dismissUpdate() { updateDismissed = true }
 
+    /// "Re-check" in setup / onboarding.
     func refreshTools() async {
-        toolPaths = await ToolLocator.locate()
-        if toolPaths.claudeInstalled && toolPaths.nodeInstalled && !brainInstalled {
-            _ = try? BrainInstaller.installIfNeeded(vault, toolPaths: toolPaths)
-            brainInstalled = true
-        }
+        await checkTools()
         reload()
     }
 
@@ -1194,6 +1238,7 @@ final class AppState {
     /// Stage + OCR every dropped file, run ONE analysis pass over all of them, then queue the
     /// grouped questions (and auto-file the obvious ones).
     private func startBatch() async {
+        await toolsReady()                 // before the busy check, so no await sits between it and claiming the batch
         guard !importBusy else { return }
         let urls = pendingBatchURLs; pendingBatchURLs = []
         guard !urls.isEmpty else { return }
@@ -1873,6 +1918,7 @@ final class AppState {
         language = "Auto (match the user)"; customInstructions = ""; permissionMode = .bypass
         selectedModel = .opus; selectedEffort = .default
         brainInstalled = false
+        toolsChecked = false
         booted = false
 
         // 4. Re-bootstrap → re-scaffolds the vault, reinstalls the brain, shows onboarding.

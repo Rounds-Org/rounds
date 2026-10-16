@@ -9,7 +9,7 @@
 
 import Foundation
 
-nonisolated struct ToolPaths: Sendable {
+nonisolated struct ToolPaths: Sendable, Codable, Equatable {
     var claude: String?
     var node: String?
     var path: String
@@ -85,22 +85,76 @@ nonisolated enum ToolLocator {
         for e in extra where !parts.contains(e) { parts.append(e) }
         path = parts.joined(separator: ":")
 
+        // Version + auth: run the binary DIRECTLY with the resolved PATH (each extra login shell cost
+        // ~1 s here — sourcing the user's .zshrc/nvm — while the commands themselves take ~0.1 s),
+        // and run both at once.
         var version: String?
         var loggedIn: Bool?
         if let claude {
-            let out = await runLoginShell("\"\(claude)\" --version 2>/dev/null")
+            let env = ["PATH": path, "HOME": home]
+            async let versionOut = run(claude, ["--version"], env: env)
+            async let authOut = run(claude, ["auth", "status", "--json"], env: env)
             // e.g. "2.1.172 (Claude Code)"
-            if let m = out.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) {
-                version = String(out[m])
+            let v = await versionOut
+            if let m = v.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) {
+                version = String(v[m])
             }
             // Cheap, model-free auth probe: `claude auth status --json` → {"loggedIn": true/false,…}.
             // Only commit to true/false when the JSON says so; anything else stays nil (don't alarm).
-            let auth = await runLoginShell("\"\(claude)\" auth status --json 2>/dev/null")
+            let auth = await authOut
             if auth.range(of: #""loggedIn"\s*:\s*true"#, options: .regularExpression) != nil { loggedIn = true }
             else if auth.range(of: #""loggedIn"\s*:\s*false"#, options: .regularExpression) != nil { loggedIn = false }
         }
 
         return ToolPaths(claude: claude, node: node, path: path, claudeVersion: version, loggedIn: loggedIn)
+    }
+
+    // MARK: launch cache
+
+    private static let cacheKey = "rounds.toolPaths.v1"
+
+    /// The tools found on the previous launch, if they're still where they were — lets Rounds open
+    /// instantly and work right away while the real probe re-checks in the background.
+    static func cached() -> ToolPaths? {
+        guard let data = UserDefaults.standard.data(forKey: cacheKey),
+              let t = try? JSONDecoder().decode(ToolPaths.self, from: data) else { return nil }
+        let fm = FileManager.default
+        if let c = t.claude, !fm.isExecutableFile(atPath: c) { return nil }
+        if let n = t.node, !fm.isExecutableFile(atPath: n) { return nil }
+        return t
+    }
+
+    static func save(_ t: ToolPaths) {
+        if let data = try? JSONEncoder().encode(t) { UserDefaults.standard.set(data, forKey: cacheKey) }
+    }
+
+    /// Run an executable directly (no shell) and return its stdout. Gives up after `timeout` seconds.
+    static func run(_ exe: String, _ args: [String], env: [String: String], timeout: TimeInterval = 10) async -> String {
+        await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            DispatchQueue.global().async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: exe)
+                proc.arguments = args
+                var e = ProcessInfo.processInfo.environment
+                for (k, v) in env { e[k] = v }
+                proc.environment = e
+                let pipe = Pipe()
+                proc.standardOutput = pipe
+                proc.standardError = FileHandle.nullDevice
+                proc.standardInput = FileHandle.nullDevice
+                do {
+                    try proc.run()
+                    let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+                    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    proc.waitUntilExit()
+                    killer.cancel()
+                    cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
+                } catch {
+                    cont.resume(returning: "")
+                }
+            }
+        }
     }
 
     static func runLoginShell(_ script: String) async -> String {
@@ -111,11 +165,16 @@ nonisolated enum ToolLocator {
                 proc.arguments = ["-lic", script]
                 let pipe = Pipe()
                 proc.standardOutput = pipe
-                proc.standardError = Pipe()
+                proc.standardError = FileHandle.nullDevice
+                proc.standardInput = FileHandle.nullDevice
                 do {
                     try proc.run()
+                    // A shell profile that hangs (or waits for input) must not stall the tool check forever.
+                    let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: killer)
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     proc.waitUntilExit()
+                    killer.cancel()
                     cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
                 } catch {
                     cont.resume(returning: "")
